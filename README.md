@@ -41,23 +41,26 @@ primary 선택
 | 파일 | 역할 |
 |---|---|
 | `SKILL.md` | 판정 게이트·워크플로·규칙·검증(스킬 본문) |
-| `ROSTER.md` | 러너 명부. `[사실]`(관찰된 도구) / `[도출]`(도구 사실의 필연적 귀결 = 한쪽이 못 한다) / `[실측]`(LEDGER 3건 이상으로 확인된 우위) / `[가설]`(측정 없음) 4등급. G3 우선순위는 `P1 = 사실·도출` > `P2 = 실측` > `P3 = 가설` |
-| `LEDGER.md` | 배정 기록. `L-<nn>` 불변 ID. **우열 칸은 사람만 채운다** |
+| `templates/ROSTER.md` | 환경별 러너 명부의 초기 템플릿. 실제 정본은 사용자 config에 생성 |
+| `templates/LEDGER.md` | 빈 배정 장부 템플릿. 실제 기록은 사용자 state에 생성 |
 | `scripts/dispatch.sh` | 위임 실행기(`codex exec` 래퍼). `headless` 프로필·read-only 기본, 성공 판정 3조건 |
+| `scripts/init_state.py` | private ROSTER/LEDGER를 Git 작업트리 밖에 최초 1회 생성하고 기존 파일은 보존 |
 | `scripts/omx_stop_hotfix.py` | OMX 0.20.4의 `identity-indeterminate` Stop 반복을 검사·완화·복원하는 명시적 로컬 도구 ([upstream #3420](https://github.com/Yeachan-Heo/oh-my-codex/issues/3420)) |
 | `scripts/ledger_distribution.py` | LEDGER 표에서 분포 집계를 생성하고 문서의 수치가 맞는지 검사 |
 | `config/headless.config.toml` | Codex headless 프로필 설치 템플릿. 기존 사용자 파일은 덮어쓰지 않는다. |
-| `tests/run_tests.py` | 151건. 가짜 `codex`와 임시 OMX fixture로 실제 실행 경로·신호·정리 실패·핫픽스 안전장치를 검증(진짜 Codex 미호출, 실제 OMX 미수정) |
+| `tests/run_tests.py` | 156건. 가짜 `codex`와 임시 OMX fixture로 실제 실행 경로·신호·정리 실패·로컬 상태·핫픽스 안전장치를 검증(진짜 Codex 미호출, 실제 OMX 미수정) |
 
 ## 빠른 시작
 
-전제: [Claude Code](https://claude.com/claude-code)와 [Codex CLI](https://developers.openai.com/codex/cli)가
-설치돼 있고 **둘 다 로그인**돼 있어야 한다. divvy는 두 러너를 부르는 얇은 층이지 둘을 설치해주지 않는다.
+전제: Python 3.9+, [Claude Code](https://claude.com/claude-code),
+[Codex CLI](https://developers.openai.com/codex/cli)가 설치돼 있고 **두 러너 모두 로그인**돼 있어야 한다.
+divvy는 두 러너를 부르는 얇은 층이지 이 의존성을 설치해주지 않는다.
 
 ```bash
 # 0. 전제 확인 — 둘 다 응답해야 한다
+python3 --version       # 3.9 이상
 claude --version
-codex --version          # 개발 기준: codex-cli 0.145.0
+codex --version         # 개발 기준: codex-cli 0.146.0
 
 # 1. 설치
 git clone https://github.com/kaidomo/divvy-skill.git ~/divvy
@@ -70,17 +73,21 @@ fi
 mkdir -p ~/.claude/skills                              # 없을 수 있다
 ln -s ~/divvy ~/.claude/skills/divvy                   # 심링크 이름이 스킬 이름이 된다
 
-# 2. Codex 프로필·인증 확인(미로그인이면 `codex login`)
+# 2. 개인 상태 초기화 — 공개 Git 작업트리에는 기록하지 않는다
+python3 ~/divvy/scripts/init_state.py init
+# 기본 경로: ~/.local/state/divvy/LEDGER.md, ~/.config/divvy/ROSTER.md
+
+# 3. Codex 프로필·인증 확인(미로그인이면 `codex login`)
 codex exec --profile headless --skip-git-repo-check --sandbox read-only "hi"
 
 # 선택: 부모 Codex App에서 OMX identity-indeterminate Stop 반복이 재현될 때만
 python3 ~/divvy/scripts/omx_stop_hotfix.py status
 python3 ~/divvy/scripts/omx_stop_hotfix.py apply
 
-# 3. 설치 확인 — Claude Code를 켜고
+# 4. 설치 확인 — Claude Code를 켜고
 #    "이 작업들 분배해줘" 처럼 물으면 divvy 가 뜬다. 안 뜨면 세션을 새로 시작한다.
 
-# 4. 첫 위임 — 브리프를 파일로 쓰고 던진다
+# 5. 첫 위임 — 브리프를 파일로 쓰고 던진다
 mkdir -p ~/divvy-runs && cd ~/divvy-runs
 cat > brief.md <<'EOF'
 작업: <작업루트>의 <대상>을 읽고 <무엇>을 찾아라.
@@ -90,14 +97,15 @@ cat > brief.md <<'EOF'
 EOF
 ~/divvy/scripts/dispatch.sh brief.md out.md ~/작업할레포     # 스크립트는 절대경로로 부르는 게 안전하다
 
-# 5. 회수 확인 — 3조건은 스크립트가 찍는다. 네 번째는 사람 몫이다
+# 6. 회수 확인 — 3조건은 스크립트가 찍는다. 네 번째는 사람 몫이다
 cat out.md                # 요청에 답했는지 읽는다(rc 0이어도 "작업 불가"일 수 있다)
 ```
 
 **브리프에 뭘 적나**: 작업 · 산출 형식 · **이미 내린 결정**(재논의 금지 목록). 세 번째가 핵심이다 —
 빠뜨리면 Codex가 결정된 것을 다시 논의하고, 그 회수 비용이 위임 이득을 먹는다.
 
-**첫 `L-<nn>`은 `L-01`이다**(2자리, 1부터, 재사용·재번호 금지 — `LEDGER.md` 기록 규칙).
+**첫 `L-<nn>`은 `L-01`이다**(2자리, 1부터, 재사용·재번호 금지). 실제 경로는
+`python3 scripts/init_state.py paths`로 확인한다.
 
 **설치 위치 주의**: `~/.claude/skills/`가 다른 git 레포라면 심링크가 `?? divvy`로 뜬다.
 그 레포에서 `git add -A` 하면 남의 레포에 커밋되니 `.gitignore`에 넣거나 개별 add 하라.
@@ -182,8 +190,8 @@ output 조건을 추가한다. 다른 포인터 실패의 기존 bounded/fail-cl
 ## 테스트
 
 ```bash
-python3 tests/run_tests.py                              # 151 passed
-python3 scripts/ledger_distribution.py --check LEDGER.md  # 표↔분포 일치 검사
+python3 tests/run_tests.py                                  # 156 passed
+python3 scripts/ledger_distribution.py --check templates/LEDGER.md
 ```
 
 **위 "위임 실행" 절의 약속들(read-only 기본·기존 출력 보호·잠금·신호 전달·자손 정리·백업 복구·
@@ -197,7 +205,7 @@ python3 scripts/ledger_distribution.py --check LEDGER.md  # 표↔분포 일치 
 ## 상태
 
 - **실사용 이력 0건.** ROSTER의 적성 행 중 `[가설]`은 아직 실측되지 않았다. 우열 주장은 하지 않는다.
-- 가드·경로·실패·중단·정리·빈 LEDGER 집계·OMX 핫픽스 안전장치 **151건 통과**.
+- 가드·경로·실패·중단·정리·로컬 상태·빈 LEDGER 집계·OMX 핫픽스 안전장치 **156건 통과**.
 - 공개본은 개인 작업 이력과 호스트 환경 보고서를 포함하지 않는 새 이력으로 시작한다.
 
 ## 경계

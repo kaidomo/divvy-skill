@@ -13,7 +13,12 @@ description: 들어온 일을 두 러너(Claude Code · Codex CLI)에 배정하�
 
 ## 러너 2개
 
-데이터 정본은 [`ROSTER.md`](./ROSTER.md) — 확신도가 `[사실]`(관찰된 도구) / `[도출]`(도구 사실에서 필연적으로 따라옴 = 한쪽이 못 한다) / `[실측]`(LEDGER 3건 이상으로 확인된 우위) / `[가설]`(측정 없음) 네 등급으로 나뉘어 있고, 판정은 **행 ID로 인용**한다. 승격 근거는 [`LEDGER.md`](./LEDGER.md)가 쌓는다.
+처음 사용하기 전에 `python3 scripts/init_state.py init`을 실행한다. 실제 데이터 정본은
+`python3 scripts/init_state.py paths`가 출력하는 사용자 config의 ROSTER와 사용자 state의 LEDGER다.
+공개 저장소의 [`templates/ROSTER.md`](./templates/ROSTER.md)와
+[`templates/LEDGER.md`](./templates/LEDGER.md)는 초기화 템플릿이며 개인 기록을 쓰지 않는다.
+ROSTER의 확신도는 `[사실]`(관찰된 도구) / `[도출]`(도구 사실에서 필연적으로 따라옴 = 한쪽이 못 한다) /
+`[실측]`(LEDGER 3건 이상으로 확인된 우위) / `[가설]`(측정 없음) 네 등급이고, 판정은 **행 ID로 인용**한다.
 
 | | CLAUDE (Claude Code, 이 세션) | CODEX (`codex-cli`, 헤드리스) |
 |---|---|---|
@@ -24,7 +29,7 @@ description: 들어온 일을 두 러너(Claude Code · Codex CLI)에 배정하�
 **과금이 양쪽 다 정액이라 비용은 판정 기준이 아니다.** 남는 기준은 적성·독립성·유휴다.
 
 > 공개 배포본의 ROSTER는 예시 환경에서 관찰한 기본값이다. 처음 설치했거나 러너·요금제·도구 구성이
-> 달라졌다면 `ROSTER.md`의 T행을 현재 환경에서 다시 확인한다. 특히 양쪽 정액 구독이 아니면 T-10과
+> 달라졌다면 사용자 config의 ROSTER T행을 현재 환경에서 다시 확인한다. 특히 양쪽 정액 구독이 아니면 T-10과
 > 비용 비기준 가정을 그대로 사용하지 않는다.
 
 ## 판정 — primary(G1~G3) + 보증 위상(G4)
@@ -100,7 +105,7 @@ description: 들어온 일을 두 러너(Claude Code · Codex CLI)에 배정하�
 6. CLAUDE 몫을 내가 수행한다.
 7. 회수·보고: CODEX 산출물 경로, 요약, **성공 판정 3조건**(종료코드 0 · 파일 존재 · 공백 아님) 결과. 실패는 실패로 보고한다("못 찾았다"와 "돌지 않았다"를 구분).
    **그리고 네 번째 확인은 기계가 못 한다 — 산출물이 요청에 답했는지 읽는다.** rc 0 · 파일 존재 · 공백 아님을 모두 통과하면서 내용은 "작업 불가"인 회수가 실제로 나온다(2026-07-30 실측: Codex의 훅·플러그인 preflight가 런을 중단시키고 "리뷰 불가" 한 줄을 남겼다. `--ignore-user-config`로 재실행해 해결). 이런 회수는 **성공이 아니라 재실행 또는 CLAUDE 되돌리기**다.
-8. [`LEDGER.md`](./LEDGER.md)에 `L-<nn>` 한 줄씩 기록한다(적용 행·primary·검토자·결과). **우열은 내가 채점하지 않는다** — 사람이 표시한다.
+8. 사용자 state의 LEDGER에 `L-<nn>` 한 줄씩 기록한다(적용 행·primary·검토자·결과). **우열은 내가 채점하지 않는다** — 사람이 표시한다. 저장소 템플릿은 수정하지 않는다.
 
 ## 실행 규약
 
@@ -165,7 +170,7 @@ divvy 판정 (작업 N건)
 - 비공개·규제 자료가 사람 확인 없이 위임되지 않았고, 답이 LEDGER `노출확인`에 남았다.
 - CODEX 실행 건마다 성공 판정 3조건 결과가 보고되었고, 실패가 성공으로 반올림되지 않았다.
 - LEDGER에 `L-<nn>` 행이 추가되었고, 우열 칸은 사람이 채우도록 비어 있다.
-- LEDGER를 갱신했으면 `python3 scripts/ledger_distribution.py --check LEDGER.md`가 통과한다. 완료·종료된 배정만 세고, `CLAUDE+CODEX` 동시 primary는 각 러너에 중복 산입하지 않으며, 검토자 칸에 `**실행됨**`이 명시된 건만 실행된 검토로 센다.
+- LEDGER를 갱신했으면 `python3 scripts/ledger_distribution.py --check`가 통과한다. 이 명령은 `DIVVY_LEDGER` 또는 기본 사용자 state 경로를 읽는다. 완료·종료된 배정만 세고, `CLAUDE+CODEX` 동시 primary는 각 러너에 중복 산입하지 않으며, 검토자 칸에 `**실행됨**`이 명시된 건만 실행된 검토로 센다.
 - 리뷰 루프가 필요한 건은 divvy가 직접 라운드를 돌리지 않고 `peer-review`로 넘겼다.
 
 ## 연계

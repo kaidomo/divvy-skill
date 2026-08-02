@@ -28,6 +28,7 @@ import json, os, signal, subprocess, sys, tempfile, time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DISPATCH = os.path.join(ROOT, "scripts", "dispatch.sh")
 OMX_HOTFIX = os.path.join(ROOT, "scripts", "omx_stop_hotfix.py")
+INIT_STATE = os.path.join(ROOT, "scripts", "init_state.py")
 PASS, FAIL = [], []
 
 FAKE_CODEX = r"""#!/usr/bin/env bash
@@ -671,9 +672,43 @@ with tempfile.TemporaryDirectory() as tmp:
     check("  잠금 치운 뒤 정상 실행 rc0", r.returncode == 0)
     check("  잠금 잔여물 없음", not os.path.exists(o + ".lock"))
 
-# ------------------------------------------------------ LEDGER 분포 회귀
-LEDGER = os.path.join(ROOT, "LEDGER.md")
+# ------------------------------------------------------ 로컬 상태 + LEDGER 분포 회귀
+LEDGER = os.path.join(ROOT, "templates", "LEDGER.md")
+ROSTER_TEMPLATE = os.path.join(ROOT, "templates", "ROSTER.md")
 LEDGER_DISTRIBUTION = os.path.join(ROOT, "scripts", "ledger_distribution.py")
+
+with tempfile.TemporaryDirectory() as tmp:
+    env = dict(os.environ)
+    env["XDG_STATE_HOME"] = os.path.join(tmp, "state")
+    env["XDG_CONFIG_HOME"] = os.path.join(tmp, "config")
+    for name in ("DIVVY_STATE_DIR", "DIVVY_CONFIG_DIR", "DIVVY_LEDGER", "DIVVY_ROSTER"):
+        env.pop(name, None)
+    r = subprocess.run([sys.executable, INIT_STATE, "init"], capture_output=True, text=True, env=env)
+    local_ledger = os.path.join(tmp, "state", "divvy", "LEDGER.md")
+    local_roster = os.path.join(tmp, "config", "divvy", "ROSTER.md")
+    check("로컬 상태 init이 repo 밖에 ledger/roster 생성",
+          r.returncode == 0 and read(local_ledger) == read(LEDGER) and read(local_roster) == read(ROSTER_TEMPLATE))
+    r = subprocess.run([sys.executable, LEDGER_DISTRIBUTION, "--check"], capture_output=True, text=True, env=env)
+    check("  ledger_distribution 기본값은 로컬 state를 사용",
+          r.returncode == 0 and "CLAUDE primary: 0건" in r.stdout)
+    write(local_ledger, "PERSONAL LEDGER\n")
+    r = subprocess.run([sys.executable, INIT_STATE, "init"], capture_output=True, text=True, env=env)
+    check("  기존 개인 ledger/roster는 덮어쓰지 않음",
+          r.returncode == 0 and "ledger_status=preserved" in r.stdout and read(local_ledger) == "PERSONAL LEDGER\n")
+    r = subprocess.run([sys.executable, INIT_STATE, "paths"], capture_output=True, text=True, env=env)
+    check("  paths는 XDG 경로를 출력하고 파일을 수정하지 않음",
+          r.returncode == 0 and f"ledger={os.path.realpath(local_ledger)}" in r.stdout
+          and read(local_ledger) == "PERSONAL LEDGER\n")
+
+with tempfile.TemporaryDirectory() as tmp:
+    ledger_link = os.path.join(tmp, "ledger-link")
+    roster_path = os.path.join(tmp, "roster")
+    os.symlink(LEDGER, ledger_link)
+    r = subprocess.run(
+        [sys.executable, INIT_STATE, "init"], capture_output=True, text=True,
+        env={**os.environ, "DIVVY_LEDGER": ledger_link, "DIVVY_ROSTER": roster_path},
+    )
+    check("로컬 상태 init은 심링크 대상을 거부", r.returncode == 2 and "심링크" in r.stderr)
 
 r = subprocess.run(
     [sys.executable, LEDGER_DISTRIBUTION, "--check", LEDGER],

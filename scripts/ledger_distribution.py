@@ -7,6 +7,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from init_state import resolve_paths
+
 
 PRIMARY_VALUES = ("CLAUDE", "CODEX", "CLAUDE+CODEX")
 SOURCE_VALUES = ("G1", "G2", "G3", "tie", "user")
@@ -157,7 +159,13 @@ def main():
         description="LEDGER 표에서 분포 Markdown을 생성하고, 선택적으로 문서의 집계와 대조한다."
     )
     parser.add_argument("--check", action="store_true", help="문서의 분포 절과 불일치하면 종료코드 1")
-    parser.add_argument("ledger", nargs="?", default="LEDGER.md", help="검사할 LEDGER.md 경로")
+    default_ledger, _default_roster = resolve_paths()
+    parser.add_argument(
+        "ledger",
+        nargs="?",
+        default=str(default_ledger),
+        help="검사할 LEDGER.md 경로(기본: DIVVY_LEDGER 또는 사용자 state 경로)",
+    )
     args = parser.parse_args()
 
     try:

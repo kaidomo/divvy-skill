@@ -10,3 +10,7 @@ __pycache__/
 *.pyc
 .omc/
 .omx/
+
+# Private runtime state belongs outside the checkout; ignore accidental root copies.
+/LEDGER.md
+/ROSTER.md
