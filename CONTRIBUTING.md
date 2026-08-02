@@ -4,7 +4,7 @@ Create a focused branch, keep changes scoped, and run:
 
 ```bash
 env -u CODEX_SANDBOX python3 tests/run_tests.py
-python3 scripts/ledger_distribution.py --check LEDGER.md
+python3 scripts/ledger_distribution.py --check templates/LEDGER.md
 git diff --check
 ```
 

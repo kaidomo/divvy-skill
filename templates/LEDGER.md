@@ -48,4 +48,4 @@ divvy가 내린 배정과 그 결과를 기록한다. 공개 배포본은 개인
 - user: 0건
 
 > 완료·종료된 배정만 센다. 표를 수정한 뒤에는
-> `python3 scripts/ledger_distribution.py --check LEDGER.md`로 집계를 검증한다.
+> `python3 scripts/ledger_distribution.py --check`로 사용자 state의 장부 집계를 검증한다.
