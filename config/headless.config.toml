@@ -1,0 +1,9 @@
+# Headless profile for unattended divvy runs.
+# Install as ~/.codex/headless.config.toml.
+# https://developers.openai.com/codex/config-advanced#profiles
+
+model = "gpt-5.6-sol"
+model_reasoning_effort = "medium"
+
+[features]
+hooks = false
