@@ -30,6 +30,7 @@ DISPATCH = os.path.join(ROOT, "scripts", "dispatch.sh")
 OMX_HOTFIX = os.path.join(ROOT, "scripts", "omx_stop_hotfix.py")
 INIT_STATE = os.path.join(ROOT, "scripts", "init_state.py")
 ROSTER_PROBE_TESTS = os.path.join(ROOT, "tests", "test_roster_probe.py")
+SKILL = os.path.join(ROOT, "SKILL.md")
 PASS, FAIL = [], []
 
 FAKE_CODEX = r"""#!/usr/bin/env bash
@@ -717,6 +718,26 @@ r = subprocess.run(
     text=True,
 )
 check("host-local ROSTER read-only probe 회귀", r.returncode == 0 and "OK" in r.stderr)
+
+# r1-03: SKILL은 host capability를 고정하거나 README/probe schema를 복제하지 않는다.
+skill_text = read(SKILL)
+runner_boundary = skill_text.split("## 러너 2개", 1)[1].split("## 판정", 1)[0]
+g1_boundary = skill_text.split("**G1 도구 게이트 (hard).**", 1)[1].split("**G2 브리프 비용", 1)[0]
+g4_boundary = skill_text.split("### G4 보증 위상", 1)[1].split("## 워크플로", 1)[0]
+check(
+    "SKILL capability는 host-local·단계별 관측이고 native child/tmux를 분리(r1-03)",
+    all(term in runner_boundary for term in ("host-local ROSTER", "configured", "callable", "usable", "다른 호스트"))
+    and "configured만으로 callable이나\nusable을 추론하지 않는다" in runner_boundary
+    and all(term in runner_boundary for term in ("App native child", "tmux Workflow", "별도 capability"))
+    and "schema를 복제하지 않는다" in runner_boundary
+    and "현재 host-local ROSTER" in g1_boundary
+    and "다른 호스트" in g1_boundary
+    and "CLAUDE로 갈리는 경우" not in g1_boundary
+    and "CODEX로 갈리는 경우" not in g1_boundary
+    and all(term in g4_boundary for term in ("callable·usable", "App native child", "tmux Workflow", "별도로 확인"))
+    and "Codex는 T-2상" not in g4_boundary
+    and "접근 못 하는 것" not in runner_boundary,
+)
 
 r = subprocess.run(
     [sys.executable, LEDGER_DISTRIBUTION, "--check", LEDGER],
