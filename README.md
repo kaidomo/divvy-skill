@@ -45,10 +45,11 @@ primary 선택
 | `templates/LEDGER.md` | 빈 배정 장부 템플릿. 실제 기록은 사용자 state에 생성 |
 | `scripts/dispatch.sh` | 위임 실행기(`codex exec` 래퍼). `headless` 프로필·read-only 기본, 성공 판정 3조건 |
 | `scripts/init_state.py` | private ROSTER/LEDGER를 Git 작업트리 밖에 최초 1회 생성하고 기존 파일은 보존 |
+| `scripts/roster_probe.py` | `init_state.py paths`의 host-local ROSTER와 명시적 관측 JSON을 읽기 전용으로 대조. public template은 live truth로 거부 |
 | `scripts/omx_stop_hotfix.py` | OMX 0.20.4의 `identity-indeterminate` Stop 반복을 검사·완화·복원하는 명시적 로컬 도구 ([upstream #3420](https://github.com/Yeachan-Heo/oh-my-codex/issues/3420)) |
 | `scripts/ledger_distribution.py` | LEDGER 표에서 분포 집계를 생성하고 문서의 수치가 맞는지 검사 |
 | `config/headless.config.toml` | Codex headless 프로필 설치 템플릿. 기존 사용자 파일은 덮어쓰지 않는다. |
-| `tests/run_tests.py` | 156건. 가짜 `codex`와 임시 OMX fixture로 실제 실행 경로·신호·정리 실패·로컬 상태·핫픽스 안전장치를 검증(진짜 Codex 미호출, 실제 OMX 미수정) |
+| `tests/run_tests.py` | 157건. 가짜 `codex`와 임시 OMX fixture로 실제 실행 경로·신호·정리 실패·로컬 상태·ROSTER probe·핫픽스 안전장치를 검증(진짜 Codex 미호출, 실제 OMX 미수정) |
 
 ## 빠른 시작
 
@@ -187,10 +188,34 @@ output 조건을 추가한다. 다른 포인터 실패의 기존 bounded/fail-cl
 각 파일 옆에 `.divvy-omx-3420.bak` 백업을 만든다. OMX 업데이트·재설치는 패치를 덮어쓸 수 있으므로
 그 뒤에는 `status`를 다시 실행한다. upstream 공식 수정이 배포되면 로컬 핫픽스 대신 그 버전을 사용한다.
 
+## Host-local ROSTER drift probe
+
+실제 ROSTER는 `python3 scripts/init_state.py paths`의 `roster=` 경로가 정본이다. `templates/ROSTER.md`는
+예시·초기값일 뿐이며 probe는 그 파일을 live 입력으로 거부한다. host-local ROSTER에는 host를 한 번 선언하고,
+기계 판정할 CODEX 셀에 현재 확인된 최상위 capability를 하나만 표시한다.
+
+```markdown
+- host: `workstation-a`
+| T-5a | App native child-agent | 있음 | child smoke 성공 <!-- divvy-capability: usable --> |
+| T-5b | tmux Workflow | 있음 | 명령만 응답, workflow smoke 미실행 <!-- divvy-capability: callable --> |
+```
+
+관측 JSON은 같은 host와 행별 `state`, 요약, 재현 명령, 권장 문구를 제공한다. `state`는
+`configured | callable | usable | absent | auth-failed | unverified` 중 하나다. 설정 존재만으로 callable/usable을
+추론하지 않는다. host·marker·필수 관측 필드가 없거나 예상하지 못한 값이면 `unverified`로 닫힌다.
+
+```bash
+python3 scripts/roster_probe.py --observations observations.json
+```
+
+출력은 행별 `match | drift | unverified | auth-failed`와 입력 ROSTER의 실행 전후 SHA-256을 포함한다.
+probe는 ROSTER를 수정하지 않으며 권장 문구도 자동 적용하지 않는다.
+
 ## 테스트
 
 ```bash
-python3 tests/run_tests.py                                  # 156 passed
+python3 tests/test_roster_probe.py                          # targeted probe tests
+python3 tests/run_tests.py                                  # 157 passed
 python3 scripts/ledger_distribution.py --check templates/LEDGER.md
 ```
 
