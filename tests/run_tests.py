@@ -29,6 +29,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DISPATCH = os.path.join(ROOT, "scripts", "dispatch.sh")
 OMX_HOTFIX = os.path.join(ROOT, "scripts", "omx_stop_hotfix.py")
 INIT_STATE = os.path.join(ROOT, "scripts", "init_state.py")
+ROSTER_PROBE_TESTS = os.path.join(ROOT, "tests", "test_roster_probe.py")
 PASS, FAIL = [], []
 
 FAKE_CODEX = r"""#!/usr/bin/env bash
@@ -708,7 +709,14 @@ with tempfile.TemporaryDirectory() as tmp:
         [sys.executable, INIT_STATE, "init"], capture_output=True, text=True,
         env={**os.environ, "DIVVY_LEDGER": ledger_link, "DIVVY_ROSTER": roster_path},
     )
-    check("로컬 상태 init은 심링크 대상을 거부", r.returncode == 2 and "심링크" in r.stderr)
+check("로컬 상태 init은 심링크 대상을 거부", r.returncode == 2 and "심링크" in r.stderr)
+
+r = subprocess.run(
+    [sys.executable, ROSTER_PROBE_TESTS],
+    capture_output=True,
+    text=True,
+)
+check("host-local ROSTER read-only probe 회귀", r.returncode == 0 and "OK" in r.stderr)
 
 r = subprocess.run(
     [sys.executable, LEDGER_DISTRIBUTION, "--check", LEDGER],
