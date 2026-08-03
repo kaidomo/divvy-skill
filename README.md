@@ -203,6 +203,9 @@ output 조건을 추가한다. 다른 포인터 실패의 기존 bounded/fail-cl
 관측 JSON은 같은 host와 행별 `state`, 요약, 재현 명령, 권장 문구를 제공한다. `state`는
 `configured | callable | usable | absent | auth-failed | unverified` 중 하나다. 설정 존재만으로 callable/usable을
 추론하지 않는다. host·marker·필수 관측 필드가 없거나 예상하지 못한 값이면 `unverified`로 닫힌다.
+이 JSON은 외부 관측자가 만든 신뢰 입력이다. probe는 `evidence_command`를 실행하거나 관측 provenance를 검증하지
+않으므로, 자동 배정 정책의 직접 입력으로 사용하기 전에 생성 주체와 관측 시점을 사람이 확인해야 한다. host 선언이
+둘 이상이거나 같은 ROSTER 행 ID가 중복되면 임의의 값을 고르지 않고 실행을 거부한다.
 
 ```bash
 python3 scripts/roster_probe.py --observations observations.json
@@ -230,7 +233,7 @@ python3 scripts/ledger_distribution.py --check templates/LEDGER.md
 ## 상태
 
 - **실사용 이력 0건.** ROSTER의 적성 행 중 `[가설]`은 아직 실측되지 않았다. 우열 주장은 하지 않는다.
-- 가드·경로·실패·중단·정리·로컬 상태·빈 LEDGER 집계·OMX 핫픽스 안전장치 **156건 통과**.
+- 가드·경로·실패·중단·정리·로컬 상태·ROSTER probe·빈 LEDGER 집계·OMX 핫픽스 안전장치 **157건 통과**.
 - 공개본은 개인 작업 이력과 호스트 환경 보고서를 포함하지 않는 새 이력으로 시작한다.
 
 ## 경계

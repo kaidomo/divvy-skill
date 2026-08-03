@@ -67,13 +67,18 @@ def load_observations(path: Path) -> dict[str, Any]:
 
 
 def parse_roster(text: str) -> tuple[str | None, dict[str, str]]:
-    host_match = HOST_RE.search(text)
-    host = host_match.group(1) if host_match else None
+    hosts = HOST_RE.findall(text)
+    if len(hosts) > 1:
+        raise ProbeError(f"ROSTER must declare at most one host; found {len(hosts)}")
+    host = hosts[0] if hosts else None
     rows: dict[str, str] = {}
     for line in text.splitlines():
         match = ROW_RE.match(line)
         if match:
-            rows[match.group(1).strip()] = match.group(4).strip()
+            row_id = match.group(1).strip()
+            if row_id in rows:
+                raise ProbeError(f"duplicate ROSTER row ID: {row_id}")
+            rows[row_id] = match.group(4).strip()
     return host, rows
 
 
@@ -148,11 +153,10 @@ def report_row(
 
 def run(roster: Path, observations_path: Path) -> dict[str, Any]:
     roster = roster.resolve()
-    try:
-        if roster.samefile(ROSTER_TEMPLATE):
-            raise ProbeError("public templates/ROSTER.md is an example, not live host truth")
-    except FileNotFoundError as exc:
-        raise ProbeError(f"ROSTER does not exist: {roster}") from exc
+    if not roster.is_file():
+        raise ProbeError(f"ROSTER does not exist or is not a regular file: {roster}")
+    if ROSTER_TEMPLATE.is_file() and roster.samefile(ROSTER_TEMPLATE):
+        raise ProbeError("public templates/ROSTER.md is an example, not live host truth")
 
     before = sha256(roster)
     roster_text = roster.read_text(encoding="utf-8")

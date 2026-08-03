@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,10 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 PROBE = ROOT / "scripts" / "roster_probe.py"
 TEMPLATE = ROOT / "templates" / "ROSTER.md"
+PROBE_SPEC = importlib.util.spec_from_file_location("divvy_roster_probe", PROBE)
+assert PROBE_SPEC and PROBE_SPEC.loader
+PROBE_MODULE = importlib.util.module_from_spec(PROBE_SPEC)
+PROBE_SPEC.loader.exec_module(PROBE_MODULE)
 
 
 def roster(host="host-a", rows=None):
@@ -91,6 +96,19 @@ class RosterProbeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["results"][0]["status"], "unverified")
 
+    def test_duplicate_host_declarations_are_rejected(self):
+        roster_text = roster(rows=[("T-1", "usable")]) + "\n- host: `host-b`\n"
+        value = {"host": "host-a", "observations": [observation("T-1", "usable")]}
+        result, _ = self.run_probe(roster_text, value)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("at most one host", result.stderr)
+
+    def test_duplicate_roster_rows_are_rejected(self):
+        value = {"host": "host-a", "observations": [observation("T-1", "usable")]}
+        result, _ = self.run_probe(roster(rows=[("T-1", "usable"), ("T-1", "configured")]), value)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("duplicate ROSTER row ID: T-1", result.stderr)
+
     def test_missing_marker_and_incomplete_observation_fail_closed(self):
         value = {"host": "host-a", "observations": [{"row_id": "T-4", "state": "usable", "summary": "free prose"}]}
         result, _ = self.run_probe(roster(rows=[("T-4", None)]), value)
@@ -151,6 +169,31 @@ class RosterProbeTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 2)
             self.assertIn("example, not live host truth", result.stderr)
+
+    def test_missing_public_template_does_not_hide_a_valid_live_roster(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            roster_path = root / "ROSTER.md"
+            observations_path = root / "observations.json"
+            roster_path.write_text(roster(rows=[("T-1", "usable")]), encoding="utf-8")
+            observations_path.write_text(
+                json.dumps({"host": "host-a", "observations": [observation("T-1", "usable")]}),
+                encoding="utf-8",
+            )
+            original_template = PROBE_MODULE.ROSTER_TEMPLATE
+            self.addCleanup(setattr, PROBE_MODULE, "ROSTER_TEMPLATE", original_template)
+            PROBE_MODULE.ROSTER_TEMPLATE = root / "missing-template.md"
+            payload = PROBE_MODULE.run(roster_path, observations_path)
+            self.assertEqual(payload["results"][0]["status"], "match")
+
+    def test_duplicate_observations_fail_closed(self):
+        value = {
+            "host": "host-a",
+            "observations": [observation("T-1", "usable"), observation("T-1", "configured")],
+        }
+        result, _ = self.run_probe(roster(rows=[("T-1", "usable")]), value)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["results"][0]["status"], "unverified")
 
     def test_native_child_and_tmux_workflow_remain_separate(self):
         rows = [("T-5a", "usable"), ("T-5b", "callable")]
