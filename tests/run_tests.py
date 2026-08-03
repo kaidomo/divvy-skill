@@ -721,13 +721,30 @@ check("host-local ROSTER read-only probe 회귀", r.returncode == 0 and "OK" in 
 
 # r1-03: SKILL은 host capability를 고정하거나 README/probe schema를 복제하지 않는다.
 skill_text = read(SKILL)
-runner_boundary = skill_text.split("## 러너 2개", 1)[1].split("## 판정", 1)[0]
-g1_boundary = skill_text.split("**G1 도구 게이트 (hard).**", 1)[1].split("**G2 브리프 비용", 1)[0]
-g4_boundary = skill_text.split("### G4 보증 위상", 1)[1].split("## 워크플로", 1)[0]
+
+
+def section_between(text, start, end):
+    if start not in text:
+        return None
+    section, separator, _ = text.split(start, 1)[1].partition(end)
+    return section if separator else None
+
+
+runner_boundary = section_between(skill_text, "## 러너 2개", "## 판정")
+g1_boundary = section_between(skill_text, "**G1 도구 게이트 (hard).**", "**G2 브리프 비용")
+g4_boundary = section_between(skill_text, "### G4 보증 위상", "## 워크플로")
+check(
+    "SKILL capability 경계 누락은 예외 없이 실패로 판정(r1-03)",
+    section_between("start only", "start", "end") is None,
+)
+runner_boundary = runner_boundary or ""
+g1_boundary = g1_boundary or ""
+g4_boundary = g4_boundary or ""
+normalized_runner_boundary = " ".join(runner_boundary.split())
 check(
     "SKILL capability는 host-local·단계별 관측이고 native child/tmux를 분리(r1-03)",
     all(term in runner_boundary for term in ("host-local ROSTER", "configured", "callable", "usable", "다른 호스트"))
-    and "configured만으로 callable이나\nusable을 추론하지 않는다" in runner_boundary
+    and "configured만으로 callable이나 usable을 추론하지 않는다" in normalized_runner_boundary
     and all(term in runner_boundary for term in ("App native child", "tmux Workflow", "별도 capability"))
     and "schema를 복제하지 않는다" in runner_boundary
     and "현재 host-local ROSTER" in g1_boundary
