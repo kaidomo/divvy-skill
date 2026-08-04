@@ -9,9 +9,12 @@ Claude Code 스킬 1개. 판정만 하는 조언 도구가 아니라, Codex 몫�
 두 도구를 다 구독해도 한쪽이 유휴가 된다. **[가설]** 그 원인은 실력 차이가 아니라 **맥락 이전 비용**이다 —
 "설명하느니 내가 하지"가 매번 이긴다. divvy는 그 비용을 판정에 명시적으로 넣어(G2) 그 편향을 깬다.
 
-**아직 실측이 아니다**(LEDGER 0건). 경쟁 원인이 최소 셋 있다: 도구 편중(G1에서 갈리는 일이 원래 많다),
-작업 구성 자체, 노출 승인 보류. 그래서 LEDGER는 러너 총계 말고 **결정출처별·미위임사유별**로 따로 센다 —
-원인은 그 집계가 쌓인 뒤에 말한다. 어느 러너가 잘했는지도 사람이 기록한다(자기채점 금지).
+이 설명은 아직 **[가설]**이다. 공개 `templates/LEDGER.md`는 빈 초기화 템플릿이지만, 실제 사용 이력과
+건수는 host-local이며 의도적으로 공개하지 않는다. 따라서 빈 공개 템플릿에서 전체 live usage의 부재를
+추론하지 않는다. 경쟁 원인이 최소 셋 있다: 도구 편중(G1에서 갈리는 일이 원래 많다), 작업 구성 자체,
+노출 승인 보류. 그래서 선택한 live LEDGER는 러너 총계 말고 **결정출처별·미위임사유별**로 따로 센다 —
+원인은 그 집계가 쌓인 뒤에 말한다. `[실측]` 우위로 올리려면 그 live LEDGER에서 사람이 채점한 결과가
+3건 이상이어야 하며, 어느 러너가 잘했는지도 사람만 기록한다(자기채점 금지).
 
 과금은 판정 기준이 아니다. 양쪽 다 정액이면 "싼 쪽으로 밀기"가 성립하지 않는다.
 남는 기준은 **도구 가용성 · 브리프 비용 · 적성 · 오판 비용**뿐이다.
@@ -44,12 +47,50 @@ primary 선택
 | `templates/ROSTER.md` | 환경별 러너 명부의 초기 템플릿. 실제 정본은 사용자 config에 생성 |
 | `templates/LEDGER.md` | 빈 배정 장부 템플릿. 실제 기록은 사용자 state에 생성 |
 | `scripts/dispatch.sh` | 위임 실행기(`codex exec` 래퍼). `headless` 프로필·read-only 기본, 성공 판정 3조건 |
-| `scripts/init_state.py` | private ROSTER/LEDGER를 Git 작업트리 밖에 최초 1회 생성하고 기존 파일은 보존 |
+| `scripts/init_state.py` | private ROSTER/LEDGER를 Git 작업트리 밖에 안전하게 생성하고 권한을 읽기 전용 점검하거나 명시적으로 migration |
 | `scripts/roster_probe.py` | `init_state.py paths`의 host-local ROSTER와 명시적 관측 JSON을 읽기 전용으로 대조. public template은 live truth로 거부 |
 | `scripts/omx_stop_hotfix.py` | OMX 0.20.4의 `identity-indeterminate` Stop 반복을 검사·완화·복원하는 명시적 로컬 도구 ([upstream #3420](https://github.com/Yeachan-Heo/oh-my-codex/issues/3420)) |
 | `scripts/ledger_distribution.py` | LEDGER 표에서 분포 집계를 생성하고 문서의 수치가 맞는지 검사 |
 | `config/headless.config.toml` | Codex headless 프로필 설치 템플릿. 기존 사용자 파일은 덮어쓰지 않는다. |
-| `tests/run_tests.py` | 157건. 가짜 `codex`와 임시 OMX fixture로 실제 실행 경로·신호·정리 실패·로컬 상태·ROSTER probe·핫픽스 안전장치를 검증(진짜 Codex 미호출, 실제 OMX 미수정) |
+| `tests/run_tests.py` | 164개 통합 확인(권한 보안 31개 focused test 포함). 가짜 `codex`와 임시 fixture로 실행 경로·신호·정리 실패·로컬 상태·ROSTER probe·핫픽스 안전장치를 검증(진짜 Codex 미호출, 실제 OMX 미수정) |
+
+## Host-local state 권한
+
+`init_state.py`의 명령 계약은 다음과 같다. 모든 명령은 Python 3.9+ 표준 라이브러리만 사용한다.
+
+| 명령 | 동작 | 종료코드 |
+|---|---|---|
+| `paths` | 선택된 ROSTER/LEDGER 경로만 출력한다. 파일을 만들거나 바꾸지 않는다. | `0` |
+| `init` | 없는 private state를 소유 범위의 leaf 디렉터리 `0700`, 파일 `0600`으로 생성한다. 안전하고 이미 compliant한 파일은 `preserved`하고, 기존 파일의 내용이나 mode는 자동 변경하지 않는다. | `0` 성공, `2` 검증·안전 조건 거부 |
+| `check-permissions` | type, owner, link, 중복/alias, mode를 읽기 전용으로 점검한다. | `0` compliant, `3` migration 필요, `2` 안전 검증 거부 |
+| `migrate-permissions` | 모든 대상을 먼저 검증한 뒤 mode만 `0700`/`0600`으로 바꾼다. 파일 bytes는 바꾸지 않으며 재실행은 no-op이다. | `0` 성공/no-op, `2` 검증 거부, `4` partial migration 또는 rollback 실패 |
+
+`check-permissions`는 안전하고 되돌릴 필요가 없는 사전 점검이다. `init`도 기존 state를 조용히 migration하지
+않는다. 기존 state의 mode 변경은 **별도 승인 경계**인 `migrate-permissions` 명령이다. 먼저 `paths`와
+`check-permissions` 결과에서 정확한 대상·현재 mode·목표 mode를 검토하고, 그 변경을 사람이 승인한 뒤에만
+실행한다. 명령을 입력했다는 사실이 내용 검토나 host 승인을 대신하지 않는다.
+
+경로별 소유 범위도 다르다.
+
+- 기본 경로는 검증된 HOME에서 빠진 `.config`, `.local`, `state` 구성요소와 선택된 `divvy` leaf를 `0700`으로
+  만들 수 있다. 기존 compliant 조상 디렉터리는 chmod하지 않는다.
+- `XDG_*` 또는 `DIVVY_STATE_DIR`/`DIVVY_CONFIG_DIR` override의 parent는 이미 존재하고 현재 사용자 소유의
+  안전한 디렉터리여야 한다. 그 parent는 바꾸지 않고 선택된 `divvy` leaf만 만들거나 관리한다.
+- `DIVVY_LEDGER`/`DIVVY_ROSTER` exact-file override의 parent도 이미 안전하게 존재해야 한다. 임의 parent의
+  mode는 바꾸지 않고 지정한 파일만 관리한다.
+
+여러 대상의 migration은 **원자적이지 않다**. 도구는 모든 descriptor를 먼저 검증·유지한 뒤 정해진
+순서로 mode를 바꾸고, 중간 실패 시 이미 바꾼 대상을 이전 mode로 되돌리려 한다. rollback까지 실패하면
+`status=PARTIAL`, `reason_code=partial_rollback`, 정확한 `resume_stage`와 함께 rc 4로 멈춘다. 이 경우 자동
+완료로 간주하지 말고 receipt를 검토해 명시적으로 복구한다. 로컬 receipt에는 exact `path`와 자유 형식
+`detail`이 포함될 수 있으므로 공개하지 않는다. permission 명령의 기계 판독 출력은
+`schema=divvy-state-permissions/v1`인 안정된 `key=value` 행이다. 공개 요약에는 `path_label`과 고정된
+`reason_code`만 사용한다.
+
+안전성은 `dir_fd`, `O_NOFOLLOW`, `O_DIRECTORY`, descriptor 유지 탐색, 안전한 no-clobber link publication을
+제공하는 macOS/POSIX 환경을 전제로 한다. Python 3.9+라는 버전 조건만으로 이 기능들이 보장되지는 않는다.
+현재 플랫폼이나 Python 빌드에 필요한 primitive가 없으면 rc 2로 fail closed하며, pathname 기반의 불안전한
+fallback은 사용하지 않는다.
 
 ## 빠른 시작
 
@@ -77,6 +118,11 @@ ln -s ~/divvy ~/.claude/skills/divvy                   # 심링크 이름이 스
 # 2. 개인 상태 초기화 — 공개 Git 작업트리에는 기록하지 않는다
 python3 ~/divvy/scripts/init_state.py init
 # 기본 경로: ~/.local/state/divvy/LEDGER.md, ~/.config/divvy/ROSTER.md
+
+# 기존 설치의 권한 점검 — read-only
+python3 ~/divvy/scripts/init_state.py check-permissions
+# rc 3이면 결과를 검토하고 mode 변경을 명시적으로 승인한 뒤 다음 명령을 별도로 실행한다.
+# python3 ~/divvy/scripts/init_state.py migrate-permissions
 
 # 3. Codex 프로필·인증 확인(미로그인이면 `codex login`)
 codex exec --profile headless --skip-git-repo-check --sandbox read-only "hi"
@@ -218,7 +264,7 @@ probe는 ROSTER를 수정하지 않으며 권장 문구도 자동 적용하지 �
 
 ```bash
 python3 tests/test_roster_probe.py                          # targeted probe tests
-python3 tests/run_tests.py                                  # 157 passed
+python3 tests/run_tests.py                                  # 164 passed
 python3 scripts/ledger_distribution.py --check templates/LEDGER.md
 ```
 
@@ -232,9 +278,13 @@ python3 scripts/ledger_distribution.py --check templates/LEDGER.md
 
 ## 상태
 
-- **실사용 이력 0건.** ROSTER의 적성 행 중 `[가설]`은 아직 실측되지 않았다. 우열 주장은 하지 않는다.
-- 가드·경로·실패·중단·정리·로컬 상태·ROSTER probe·빈 LEDGER 집계·OMX 핫픽스 안전장치 **157건 통과**.
-- 공개본은 개인 작업 이력과 호스트 환경 보고서를 포함하지 않는 새 이력으로 시작한다.
+- 공개 `templates/LEDGER.md`는 초기화를 위한 빈 예시다. live 사용 이력·행·건수는 host-local이며
+  의도적으로 공개하지 않으므로, 공개 템플릿만으로 전체 실사용 건수를 추론하지 않는다.
+- ROSTER의 `[실측]` 우위는 선택한 live LEDGER에서 **사람이 채점한 결과 3건 이상**일 때만 쓸 수 있다.
+  기계 실행 결과만으로 우열을 채우거나 승격하지 않는다.
+- 가드·경로·실패·중단·정리·로컬 상태·ROSTER probe·빈 공개 LEDGER 템플릿 집계·OMX 핫픽스
+  안전장치 **164개 통합 확인 통과**(state 권한 focused test 31개 포함).
+- 공개본에는 개인 작업 이력과 호스트 환경 보고서를 싣지 않는다.
 
 ## 경계
 
