@@ -1,5 +1,7 @@
 # divvy
 
+현재 버전은 [`VERSION`](./VERSION)의 한 줄 SemVer가 정본이다.
+
 **두 러너(Claude Code · Codex CLI)를 동시에 물고 있을 때, 일마다 누가 할지 정하고 그 배정대로 실제로 돌리는 분배기.**
 
 Claude Code 스킬 1개. 판정만 하는 조언 도구가 아니라, Codex 몫은 `codex exec`로 직접 던져 산출물을 회수한다.
@@ -43,6 +45,9 @@ primary 선택
 
 | 파일 | 역할 |
 |---|---|
+| `VERSION` | 현재 SemVer 버전의 단일 정본 |
+| `CHANGELOG.md` | 버전별 사용자 가시적 변경과 GitHub Release notes 원본 |
+| `RELEASING.md` | 버전 결정, 검증, 서명 태그, 자동 발행, 실패 복구 절차 |
 | `SKILL.md` | 판정 게이트·워크플로·규칙·검증(스킬 본문) |
 | `templates/ROSTER.md` | 환경별 러너 명부의 초기 템플릿. 실제 정본은 사용자 config에 생성 |
 | `templates/LEDGER.md` | 빈 배정 장부 템플릿. 실제 기록은 사용자 state에 생성 |
@@ -51,8 +56,9 @@ primary 선택
 | `scripts/roster_probe.py` | `init_state.py paths`의 host-local ROSTER와 명시적 관측 JSON을 읽기 전용으로 대조. public template은 live truth로 거부 |
 | `scripts/omx_stop_hotfix.py` | OMX 0.20.4의 `identity-indeterminate` Stop 반복을 검사·완화·복원하는 명시적 로컬 도구 ([upstream #3420](https://github.com/Yeachan-Heo/oh-my-codex/issues/3420)) |
 | `scripts/ledger_distribution.py` | LEDGER 표에서 분포 집계를 생성하고 문서의 수치가 맞는지 검사 |
+| `scripts/release.py` | VERSION·태그·CHANGELOG 정합 검사, 다음 SemVer 계산, release notes 렌더링 |
 | `config/headless.config.toml` | Codex headless 프로필 설치 템플릿. 기존 사용자 파일은 덮어쓰지 않는다. |
-| `tests/run_tests.py` | 164개 통합 확인(권한 보안 34개 focused test 포함). 가짜 `codex`와 임시 fixture로 실행 경로·신호·정리 실패·로컬 상태·ROSTER probe·핫픽스 안전장치를 검증(진짜 Codex 미호출, 실제 OMX 미수정) |
+| `tests/run_tests.py` | 165개 통합 확인(권한 보안 34개 focused test 포함). 가짜 `codex`와 임시 fixture로 실행 경로·신호·정리 실패·로컬 상태·ROSTER probe·릴리즈·핫픽스 안전장치를 검증(진짜 Codex 미호출, 실제 OMX 미수정) |
 
 ## Host-local state 권한
 
@@ -264,9 +270,26 @@ probe는 ROSTER를 수정하지 않으며 권장 문구도 자동 적용하지 �
 
 ```bash
 python3 tests/test_roster_probe.py                          # targeted probe tests
-python3 tests/run_tests.py                                  # 164 passed
+python3 tests/test_release.py                               # release metadata/workflow tests
+python3 tests/run_tests.py                                  # 165 passed
 python3 scripts/ledger_distribution.py --check templates/LEDGER.md
 ```
+
+## 버전과 릴리즈
+
+`VERSION`의 한 줄 SemVer가 정본이고, 같은 버전의 `CHANGELOG.md` 절이 GitHub Release notes가 된다.
+이 저장소는 Python 패키지가 아니므로 배포용 `package.json`을 만들지 않는다.
+
+```bash
+python3 scripts/release.py current              # 현재 버전
+python3 scripts/release.py next patch           # 다음 patch 버전 미리보기
+python3 scripts/release.py check                # VERSION + CHANGELOG 정합
+python3 scripts/release.py check --tag "v$(python3 scripts/release.py current)" --history
+```
+
+릴리즈 PR이 병합된 뒤 최신 `main`에 서명 태그를 push하면 GitHub Actions가 태그·버전 이력·정확한
+`main` head·전체 테스트를 검증하고 Release를 생성한다. 버전 정책, 정확한 명령, 서명 검증과 실패 복구는
+[`RELEASING.md`](./RELEASING.md)를 따른다. 태그 push는 별도 공개 승인 경계다.
 
 **위 "위임 실행" 절의 약속들(read-only 기본·기존 출력 보호·잠금·신호 전달·자손 정리·백업 복구·
 성공 3조건·종료코드)은 각각 대응하는 테스트가 고정한다.** 문서를 읽는 것만으로는 확인할 수 없으니,
@@ -283,7 +306,7 @@ python3 scripts/ledger_distribution.py --check templates/LEDGER.md
 - ROSTER의 `[실측]` 우위는 선택한 live LEDGER에서 **사람이 채점한 결과 3건 이상**일 때만 쓸 수 있다.
   기계 실행 결과만으로 우열을 채우거나 승격하지 않는다.
 - 가드·경로·실패·중단·정리·로컬 상태·ROSTER probe·빈 공개 LEDGER 템플릿 집계·OMX 핫픽스
-  안전장치 **164개 통합 확인 통과**(state 권한 focused test 34개 포함).
+  안전장치 **165개 통합 확인 통과**(state 권한 focused test 34개 포함).
 - 공개본에는 개인 작업 이력과 호스트 환경 보고서를 싣지 않는다.
 
 ## 경계

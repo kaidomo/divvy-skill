@@ -31,6 +31,7 @@ OMX_HOTFIX = os.path.join(ROOT, "scripts", "omx_stop_hotfix.py")
 INIT_STATE = os.path.join(ROOT, "scripts", "init_state.py")
 ROSTER_PROBE_TESTS = os.path.join(ROOT, "tests", "test_roster_probe.py")
 STATE_PERMISSION_TESTS = os.path.join(ROOT, "tests", "test_state_permissions.py")
+RELEASE_TESTS = os.path.join(ROOT, "tests", "test_release.py")
 README = os.path.join(ROOT, "README.md")
 SKILL = os.path.join(ROOT, "SKILL.md")
 PASS, FAIL = [], []
@@ -740,6 +741,13 @@ r = subprocess.run(
     text=True,
 )
 check("host-local state permission/security contract", r.returncode == 0)
+
+r = subprocess.run(
+    [sys.executable, RELEASE_TESTS],
+    capture_output=True,
+    text=True,
+)
+check("release metadata and workflow contract", r.returncode == 0 and "OK" in r.stderr)
 
 # r1-03: SKILL은 host capability를 고정하거나 README/probe schema를 복제하지 않는다.
 skill_text = read(SKILL)
