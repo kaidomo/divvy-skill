@@ -69,7 +69,11 @@ def version_tuple(version: str) -> Tuple[int, int, int]:
     match = SEMVER_RE.fullmatch(version)
     if match is None:
         raise ReleaseError(f"not a stable MAJOR.MINOR.PATCH version: {version!r}")
-    return tuple(int(match.group(name)) for name in ("major", "minor", "patch"))
+    return (
+        int(match.group("major")),
+        int(match.group("minor")),
+        int(match.group("patch")),
+    )
 
 
 def git_release_versions(root: Path, current_tag: str) -> List[Tuple[str, Tuple[int, int, int]]]:
@@ -165,7 +169,7 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
             version = check_release(tag=args.tag, history=args.history)
             print(f"release metadata valid: v{version}")
         elif args.command == "notes":
-            version = check_release()
+            version = read_version()
             notes = release_notes(ROOT, version)
             if args.output is None:
                 print(notes, end="")
