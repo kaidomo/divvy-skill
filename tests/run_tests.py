@@ -30,6 +30,8 @@ DISPATCH = os.path.join(ROOT, "scripts", "dispatch.sh")
 OMX_HOTFIX = os.path.join(ROOT, "scripts", "omx_stop_hotfix.py")
 INIT_STATE = os.path.join(ROOT, "scripts", "init_state.py")
 ROSTER_PROBE_TESTS = os.path.join(ROOT, "tests", "test_roster_probe.py")
+STATE_PERMISSION_TESTS = os.path.join(ROOT, "tests", "test_state_permissions.py")
+README = os.path.join(ROOT, "README.md")
 SKILL = os.path.join(ROOT, "SKILL.md")
 PASS, FAIL = [], []
 
@@ -132,9 +134,15 @@ def selector_is(path, expected):
     return profile_count == 0 and isolate_count == 1
 
 
-def run(args, env=None, dry=False, fake=None):
+def test_env():
     e = dict(os.environ)
     e.pop("CODEX_MODEL", None)
+    e.pop("CODEX_SANDBOX", None)
+    return e
+
+
+def run(args, env=None, dry=False, fake=None):
+    e = test_env()
     if dry:
         e["DRY_RUN"] = "1"
     if fake is not None:
@@ -424,7 +432,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # 전달되지 않으면 bash 는 child(20초)를 기다린 뒤에야 trap 을 돌리므로 timeout 으로 잡힌다.
     o = out_path("sig")
     marker = os.path.join(tmp, "sig_marker")
-    env = dict(os.environ)
+    env = test_env()
     env["PATH"] = fakebin + os.pathsep + env.get("PATH", "")
     env["FAKE_MODE"] = "sleep"
     env["FAKE_MARKER"] = marker
@@ -493,7 +501,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # r3-01: 자손 프로세스가 신호를 넘기고 살아남아 지연 쓰기를 하지 못한다
     o = out_path("gc")
     marker = os.path.join(tmp, "gc_marker")
-    env = dict(os.environ)
+    env = test_env()
     env["PATH"] = fakebin + os.pathsep + env.get("PATH", "")
     env.update({"FAKE_MODE": "grandchild", "FAKE_MARKER": marker, "DIVVY_SIG_GRACE": "2"})
     p = subprocess.Popen(["bash", DISPATCH, brief, o, tmp],
@@ -514,7 +522,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # r3-01: 직속 child 가 TERM 을 무시해도 무기한 대기하지 않는다(유예 후 KILL)
     o = out_path("deaf")
     marker = os.path.join(tmp, "deaf_marker")
-    env = dict(os.environ)
+    env = test_env()
     env["PATH"] = fakebin + os.pathsep + env.get("PATH", "")
     env.update({"FAKE_MODE": "deaf", "FAKE_MARKER": marker, "DIVVY_SIG_GRACE": "2"})
     p = subprocess.Popen(["bash", DISPATCH, brief, o, tmp],
@@ -550,7 +558,7 @@ with tempfile.TemporaryDirectory() as tmp:
     #        KILL 승격이 일어나지 않아 자손이 살아남는다. 그룹 잔존 여부로 판단해야 한다.
     o = out_path("deafgc")
     marker = os.path.join(tmp, "deafgc_marker")
-    env = dict(os.environ)
+    env = test_env()
     env["PATH"] = fakebin + os.pathsep + env.get("PATH", "")
     env.update({"FAKE_MODE": "deafgc", "FAKE_MARKER": marker, "DIVVY_SIG_GRACE": "2"})
     p = subprocess.Popen(["bash", DISPATCH, brief, o, tmp],
@@ -602,7 +610,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # r5-03: 유예는 그룹 기준이어야 한다 — 리더가 먼저 죽어도 자손의 정상 정리를 끊지 않는다
     o = out_path("slowclean")
     marker = os.path.join(tmp, "slowclean_marker")
-    env = dict(os.environ)
+    env = test_env()
     env["PATH"] = fakebin + os.pathsep + env.get("PATH", "")
     env.update({"FAKE_MODE": "slowclean", "FAKE_MARKER": marker, "DIVVY_SIG_GRACE": "6"})
     p = subprocess.Popen(["bash", DISPATCH, brief, o, tmp],
@@ -680,9 +688,13 @@ ROSTER_TEMPLATE = os.path.join(ROOT, "templates", "ROSTER.md")
 LEDGER_DISTRIBUTION = os.path.join(ROOT, "scripts", "ledger_distribution.py")
 
 with tempfile.TemporaryDirectory() as tmp:
-    env = dict(os.environ)
-    env["XDG_STATE_HOME"] = os.path.join(tmp, "state")
-    env["XDG_CONFIG_HOME"] = os.path.join(tmp, "config")
+    env = test_env()
+    state_base = os.path.join(tmp, "state")
+    config_base = os.path.join(tmp, "config")
+    os.makedirs(state_base, mode=0o700)
+    os.makedirs(config_base, mode=0o700)
+    env["XDG_STATE_HOME"] = state_base
+    env["XDG_CONFIG_HOME"] = config_base
     for name in ("DIVVY_STATE_DIR", "DIVVY_CONFIG_DIR", "DIVVY_LEDGER", "DIVVY_ROSTER"):
         env.pop(name, None)
     r = subprocess.run([sys.executable, INIT_STATE, "init"], capture_output=True, text=True, env=env)
@@ -710,7 +722,10 @@ with tempfile.TemporaryDirectory() as tmp:
         [sys.executable, INIT_STATE, "init"], capture_output=True, text=True,
         env={**os.environ, "DIVVY_LEDGER": ledger_link, "DIVVY_ROSTER": roster_path},
     )
-check("로컬 상태 init은 심링크 대상을 거부", r.returncode == 2 and "심링크" in r.stderr)
+check(
+    "로컬 상태 init은 심링크 대상을 거부",
+    r.returncode == 2 and "reason_code=symlink_refused" in (r.stdout + r.stderr),
+)
 
 r = subprocess.run(
     [sys.executable, ROSTER_PROBE_TESTS],
@@ -719,8 +734,28 @@ r = subprocess.run(
 )
 check("host-local ROSTER read-only probe 회귀", r.returncode == 0 and "OK" in r.stderr)
 
+r = subprocess.run(
+    [sys.executable, STATE_PERMISSION_TESTS],
+    capture_output=True,
+    text=True,
+)
+check("host-local state permission/security contract", r.returncode == 0)
+
 # r1-03: SKILL은 host capability를 고정하거나 README/probe schema를 복제하지 않는다.
 skill_text = read(SKILL)
+readme_text = read(README)
+
+for document_name, document_text in (("README", readme_text), ("SKILL", skill_text)):
+    check(
+        f"{document_name}는 빈 public template과 비공개 live history를 구분",
+        "host-local" in document_text
+        and "의도적으로 공개하지 않" in document_text
+        and "사람이 채점한 결과 3건 이상" in document_text,
+    )
+    check(
+        f"{document_name}는 global-zero 표현을 재도입하지 않음",
+        not any(legacy in document_text for legacy in ("LEDGER 0건", "실사용 이력 0건", "전체 실사용 0건")),
+    )
 
 
 def section_between(text, start, end):

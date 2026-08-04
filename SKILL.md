@@ -17,8 +17,44 @@ description: 들어온 일을 두 러너(Claude Code · Codex CLI)에 배정하�
 `python3 scripts/init_state.py paths`가 출력하는 사용자 config의 ROSTER와 사용자 state의 LEDGER다.
 공개 저장소의 [`templates/ROSTER.md`](./templates/ROSTER.md)와
 [`templates/LEDGER.md`](./templates/LEDGER.md)는 초기화 템플릿이며 개인 기록을 쓰지 않는다.
+공개 LEDGER 템플릿은 비어 있지만 live 사용 이력과 건수는 host-local이며 의도적으로 공개하지 않는다.
+따라서 빈 공개 템플릿에서 전체 live usage의 부재를 추론하지 않는다.
 ROSTER의 확신도는 `[사실]`(관찰된 도구) / `[도출]`(도구 사실에서 필연적으로 따라옴 = 한쪽이 못 한다) /
-`[실측]`(LEDGER 3건 이상으로 확인된 우위) / `[가설]`(측정 없음) 네 등급이고, 판정은 **행 ID로 인용**한다.
+`[실측]`(선택한 live LEDGER에서 **사람이 채점한 결과 3건 이상**으로 확인된 우위) / `[가설]`(측정 없음)
+네 등급이고, 판정은 **행 ID로 인용**한다. 기계나 러너가 우열 칸을 대신 채점하지 않는다.
+
+### State 권한 명령과 승인 경계
+
+- `python3 scripts/init_state.py paths`: 선택된 경로만 출력하는 read-only 명령이다.
+- `python3 scripts/init_state.py init`: 없는 private state를 소유 범위의 leaf 디렉터리 `0700`, 파일 `0600`으로
+  만든다. 기존 compliant state는 `preserved`하고, 기존 파일의 bytes나 mode는 자동 변경하지 않는다.
+  insecure mode에는 별도 `migrate-permissions`를 안내한다. unsafe type/owner/link와 중복·alias는 migration도
+  시도하지 않고 fail closed하며 rc 2를 낸다.
+- `python3 scripts/init_state.py check-permissions`: type/owner/link/alias/mode를 읽기 전용으로 검사한다.
+  compliant는 rc 0, mode migration 필요는 rc 3, 안전 검증 거부는 rc 2다.
+- `python3 scripts/init_state.py migrate-permissions`: 모든 대상을 먼저 검증한 뒤 mode만 `0700`/`0600`으로
+  바꾸고 bytes는 보존한다. 성공·멱등 no-op은 rc 0, 검증 거부는 rc 2, partial/rollback 실패는 rc 4다.
+
+기존 state의 mode 변경은 자동 초기화가 아니라 **별도 승인 경계**다. `paths`와 read-only
+`check-permissions`의 정확한 대상·현재 mode·목표 mode를 사람이 검토하고 승인한 뒤에만
+`migrate-permissions`를 실행한다. 명령 자체는 내용 검토나 host 승인을 대체하지 않는다.
+
+기본 경로는 검증된 HOME 아래에서 빠진 기본 구성요소와 선택된 `divvy` leaf만 `0700`으로 만들 수 있다.
+`XDG_*` 및 `DIVVY_STATE_DIR`/`DIVVY_CONFIG_DIR` override의 parent는 이미 존재하고 검증을 통과해야 하며,
+도구가 소유하는 것은 선택된 `divvy` leaf뿐이다. `DIVVY_LEDGER`/`DIVVY_ROSTER` exact-file override도
+parent가 이미 안전하게 존재해야 하고, 그 임의 parent의 mode를 바꾸지 않는다.
+
+여러 대상의 migration은 원자적이지 않다. validate-all 뒤 유지한 descriptor를 정해진 순서로 바꾸고,
+중간 실패 시 이전 mode로 rollback을 시도한다. rollback까지 실패하면 `status=PARTIAL`,
+`reason_code=partial_rollback`, `resume_stage`와 rc 4를 보고하므로 자동 완료로 처리하지 않는다. exact `path`와
+자유 형식 `detail`은 local-sensitive receipt에만 둔다. permission 명령은
+`schema=divvy-state-permissions/v1`인 안정된 `key=value` 행을 출력하고, 공개 요약은 `path_label`과 고정
+`reason_code`만 쓴다.
+
+이 명령은 Python 3.9+ 표준 라이브러리만 사용하며 macOS/POSIX의 `dir_fd`, `O_NOFOLLOW`, `O_DIRECTORY`,
+descriptor 유지 탐색과 안전한 no-clobber link publication을 feature-detect한다. Python 버전 조건만으로 안전
+primitive를 보장하지 않는다. 지원하지 않는 플랫폼/빌드는 mutation 전에 rc 2로 fail closed하고 불안전한
+pathname fallback을 사용하지 않는다.
 
 CLAUDE는 Claude Code 러너이고 CODEX는 `codex-cli` 러너다. 두 러너의 실제 capability·요금제·도구 상태는
 이 문서에 다시 고정하지 않고 현재 host-local ROSTER와 그 호스트에서 검토된 관측을 따른다. 공개
@@ -56,7 +92,7 @@ README의 host-local ROSTER drift probe를 사용하되, 이 문서에 probe 입
 
 측정값(브리프 줄 수·실행 패스 수)을 판정표에 적는다. 라벨만 적으면 다음 사람이 재현할 수 없다.
 
-> `[가설]` 코덱스가 유휴가 되는 주된 원인은 실력이 아니라 이 비용이다(README도 같은 등급으로 표시한다). 실측 근거는 아직 없다(LEDGER 0건). 그래서 G2는 라벨과 함께 **측정값**을 남기고, LEDGER는 **결정출처별 건수와 미위임 사유**를 따로 센다 — 원인은 그 집계가 쌓인 뒤에 말한다(경쟁 원인: G1 도구 편중·작업 구성·노출 보류).
+> `[가설]` 코덱스가 유휴가 되는 주된 원인은 실력이 아니라 이 비용이다(README도 같은 등급으로 표시한다). 공개 템플릿은 비어 있지만 live 사용 이력·건수는 host-local이며 의도적으로 공개하지 않으므로 전체 live usage의 부재를 뜻하지 않는다. G2는 라벨과 함께 **측정값**을 남기고, 선택한 live LEDGER는 **결정출처별 건수와 미위임 사유**를 따로 센다 — 원인은 사람이 채점한 결과가 쌓인 뒤에 말한다(경쟁 원인: G1 도구 편중·작업 구성·노출 보류).
 
 **G3 적성 (ROSTER).** G1·G2가 안 갈랐으면 ROSTER 행으로 맞춘다. **근거는 `C-n`/`K-n`으로 인용한다.**
 
@@ -172,6 +208,8 @@ divvy 판정 (작업 N건)
 - 비공개·규제 자료가 사람 확인 없이 위임되지 않았고, 답이 LEDGER `노출확인`에 남았다.
 - CODEX 실행 건마다 성공 판정 3조건 결과가 보고되었고, 실패가 성공으로 반올림되지 않았다.
 - LEDGER에 `L-<nn>` 행이 추가되었고, 우열 칸은 사람이 채우도록 비어 있다.
+- 빈 공개 LEDGER 템플릿에서 전체 live usage의 부재를 추론하지 않았다. live 행·건수는 host-local이며 의도적으로
+  공개하지 않았고, `[실측]`은 선택한 live LEDGER의 사람 채점 결과 3건 이상일 때만 사용했다.
 - LEDGER를 갱신했으면 `python3 scripts/ledger_distribution.py --check`가 통과한다. 이 명령은 `DIVVY_LEDGER` 또는 기본 사용자 state 경로를 읽는다. 완료·종료된 배정만 세고, `CLAUDE+CODEX` 동시 primary는 각 러너에 중복 산입하지 않으며, 검토자 칸에 `**실행됨**`이 명시된 건만 실행된 검토로 센다.
 - 리뷰 루프가 필요한 건은 divvy가 직접 라운드를 돌리지 않고 `peer-review`로 넘겼다.
 
