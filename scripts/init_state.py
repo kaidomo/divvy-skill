@@ -27,6 +27,7 @@ REASON_CODES = {
     "ok", "mode_mismatch", "unsafe_type", "owner_mismatch",
     "symlink_refused", "hardlink_refused", "duplicate_target",
     "unsupported_safe_primitive", "partial_rollback", "content_changed",
+    "residue_cleanup_required", "verification_failed",
 }
 _HAS_DIR_FD = all(
     func in os.supports_dir_fd for func in (os.open, os.mkdir, os.stat, os.unlink, os.link)
@@ -366,7 +367,7 @@ def _check_residues(spec: TargetSpec, parent_fd: int) -> None:
         # residue is reported for explicit, separately authorized cleanup.
         os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         raise StateError(
-            "hardlink_refused",
+            "residue_cleanup_required",
             "residue_requires_explicit_cleanup: verify owner token liveness prerequisites",
             spec.label,
         )
@@ -651,8 +652,17 @@ def _run_migrate(specs: List[TargetSpec]) -> int:
                     "true", "mode_mismatch", str(mutation_error), stage,
                 ), error=True)
                 return 2
-        changed_content = next((item for item in opened if _hash_fd(item.fd) != item.digest), None)
-        if changed_content is not None:
+        changed_content: Optional[OpenTarget] = None
+        verification_failure: Optional[Tuple[OpenTarget, OSError]] = None
+        for item in opened:
+            try:
+                if _hash_fd(item.fd) != item.digest:
+                    changed_content = item
+                    break
+            except OSError as exc:
+                verification_failure = (item, exc)
+                break
+        if changed_content is not None or verification_failure is not None:
             rollback_failed = False
             for prior in reversed(changed):
                 try:
@@ -664,13 +674,20 @@ def _run_migrate(specs: List[TargetSpec]) -> int:
                     os.fchmod(prior.fd, prior.before_mode)
                 except OSError:
                     rollback_failed = True
+            failed_item = changed_content if changed_content is not None else verification_failure[0]
+            content_status = "false" if changed_content is not None else "unknown"
+            reason = "content_changed" if changed_content is not None else "verification_failed"
+            detail = (
+                "target bytes changed while migration descriptors were retained"
+                if changed_content is not None
+                else "content verification failed after mode mutation: %s" % verification_failure[1]
+            )
             _emit(_receipt(
-                "migrate-permissions", changed_content.spec.label, changed_content.spec.path,
-                "PARTIAL", _mode(changed_content.before_mode),
-                _mode(stat.S_IMODE(os.fstat(changed_content.fd).st_mode)), "false",
-                "partial_rollback" if rollback_failed else "content_changed",
-                "target bytes changed while migration descriptors were retained",
-                "verification:%s" % changed_content.spec.label,
+                "migrate-permissions", failed_item.spec.label, failed_item.spec.path,
+                "PARTIAL", _mode(failed_item.before_mode),
+                _mode(stat.S_IMODE(os.fstat(failed_item.fd).st_mode)), content_status,
+                "partial_rollback" if rollback_failed else reason,
+                detail, "verification:%s" % failed_item.spec.label,
             ), error=True)
             return 4
         for item in directories:

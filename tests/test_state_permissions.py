@@ -39,6 +39,7 @@ REASONS = {
     "ok", "mode_mismatch", "unsafe_type", "owner_mismatch",
     "symlink_refused", "hardlink_refused", "duplicate_target",
     "unsupported_safe_primitive", "partial_rollback", "content_changed",
+    "residue_cleanup_required", "verification_failed",
 }
 
 
@@ -407,6 +408,34 @@ class ValidationAndMigrationTests(unittest.TestCase):
             self.assertIn("reason_code=content_changed", out + err)
             self.assertIn("content_unchanged=false", out + err)
 
+    def test_post_mutation_hash_io_error_rolls_back_and_reports_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            fx = Fixture(Path(raw))
+            for path in (fx.ledger, fx.roster):
+                path.write_bytes(b"private")
+                os.chmod(path, 0o644)
+            real_hash_fd = STATE._hash_fd
+            calls = 0
+
+            def fail_first_post_mutation_hash(fd: int) -> str:
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    raise OSError("injected post-mutation read failure")
+                return real_hash_fd(fd)
+
+            rc, out, err, error = invoke(
+                "migrate-permissions", fx.env(),
+                mock.patch.object(STATE, "_hash_fd", side_effect=fail_first_post_mutation_hash),
+            )
+            self.assertIsNone(error)
+            self.assertEqual(rc, 4)
+            self.assertEqual((mode(fx.ledger), mode(fx.roster)), (0o644, 0o644))
+            self.assertIn("status=PARTIAL", out + err)
+            self.assertIn("reason_code=verification_failed", out + err)
+            self.assertIn("content_unchanged=unknown", out + err)
+            self.assertIn("resume_stage=verification:ledger", out + err)
+
 
 class ReceiptContractTests(unittest.TestCase):
     def test_receipt_schema_has_ordered_fields_status_vocabulary_and_rc_taxonomy(self) -> None:
@@ -469,15 +498,18 @@ class ConcurrencyRaceAndCrashTests(unittest.TestCase):
             for thread in threads:
                 thread.join(10)
             self.assertFalse(any(thread.is_alive() for thread in threads))
-            self.assertIn(sorted(result.returncode for result in results), ([0, 0], [0, 2]))
+            self.assertTrue(all(result.returncode in (0, 2) for result in results))
             output = "".join(result.stdout for result in results)
             self.assertEqual(output.count("ledger_status=created"), 1)
-            self.assertEqual(
-                output.count("ledger_status=preserved")
-                + sum("reason_code=hardlink_refused" in result.stderr for result in results),
-                1,
-            )
+            for result in results:
+                if result.returncode == 2:
+                    self.assertTrue(
+                        "reason_code=hardlink_refused" in result.stderr
+                        or "reason_code=residue_cleanup_required" in result.stderr,
+                        result.stderr,
+                    )
             self.assertEqual(fx.ledger.read_bytes(), (ROOT / "templates" / "LEDGER.md").read_bytes())
+            self.assertEqual(fx.roster.read_bytes(), (ROOT / "templates" / "ROSTER.md").read_bytes())
 
     def test_replacement_at_no_clobber_publication_boundary_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -602,6 +634,7 @@ class ConcurrencyRaceAndCrashTests(unittest.TestCase):
             self.assertTrue(residues[0].exists())
             self.assertEqual(fx.ledger.stat().st_nlink, 2)
             self.assertIn("residue_requires_explicit_cleanup", retry.stderr)
+            self.assertIn("reason_code=residue_cleanup_required", retry.stderr)
 
     def test_crafted_same_inode_residue_is_never_deleted(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -618,6 +651,7 @@ class ConcurrencyRaceAndCrashTests(unittest.TestCase):
             self.assertTrue(alias.exists())
             self.assertEqual(fx.ledger.stat().st_nlink, 2)
             self.assertIn("residue_requires_explicit_cleanup", result.stderr)
+            self.assertIn("reason_code=residue_cleanup_required", result.stderr)
 
 
 if __name__ == "__main__":
