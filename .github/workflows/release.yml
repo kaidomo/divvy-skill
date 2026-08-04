@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Require the current main commit and an annotated tag
+        run: |
+          git fetch origin main
+          test "$GITHUB_SHA" = "$(git rev-parse origin/main)"
+          test "$(git cat-file -t "$GITHUB_REF_NAME")" = "tag"
+      - name: Validate tag and release metadata
+        run: python3 scripts/release.py check --tag "$GITHUB_REF_NAME" --history
+      - name: Run tests
+        run: env -u CODEX_SANDBOX python3 tests/run_tests.py
+      - name: Check LEDGER distribution
+        run: python3 scripts/ledger_distribution.py --check templates/LEDGER.md
+      - name: Render release notes
+        run: python3 scripts/release.py notes --output release-notes.md
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --fail-on-no-commits
+          --title "$GITHUB_REF_NAME"
+          --notes-file release-notes.md
