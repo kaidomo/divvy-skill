@@ -132,6 +132,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("runs-on: macos-latest", ci)
         self.assertIn("permissions:\n  contents: write", release)
         self.assertIn("runs-on: macos-latest", release)
+        self.assertIn('- "v[0-9]+.[0-9]+.[0-9]+"', release)
         self.assertIn("python3 scripts/release.py check --tag", release)
         self.assertIn('--tag "$GITHUB_REF_NAME" --history', release)
         self.assertIn('test "$GITHUB_SHA" = "$(git rev-parse origin/main)"', release)
