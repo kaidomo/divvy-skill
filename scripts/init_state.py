@@ -654,14 +654,15 @@ def _run_migrate(specs: List[TargetSpec]) -> int:
                 return 2
         changed_content: Optional[OpenTarget] = None
         verification_failure: Optional[Tuple[OpenTarget, OSError]] = None
-        for item in opened:
-            try:
-                if _hash_fd(item.fd) != item.digest:
-                    changed_content = item
+        if changed or changed_dirs:
+            for item in opened:
+                try:
+                    if _hash_fd(item.fd) != item.digest:
+                        changed_content = item
+                        break
+                except OSError as exc:
+                    verification_failure = (item, exc)
                     break
-            except OSError as exc:
-                verification_failure = (item, exc)
-                break
         if changed_content is not None or verification_failure is not None:
             rollback_failed = False
             for prior in reversed(changed):

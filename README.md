@@ -52,7 +52,7 @@ primary 선택
 | `scripts/omx_stop_hotfix.py` | OMX 0.20.4의 `identity-indeterminate` Stop 반복을 검사·완화·복원하는 명시적 로컬 도구 ([upstream #3420](https://github.com/Yeachan-Heo/oh-my-codex/issues/3420)) |
 | `scripts/ledger_distribution.py` | LEDGER 표에서 분포 집계를 생성하고 문서의 수치가 맞는지 검사 |
 | `config/headless.config.toml` | Codex headless 프로필 설치 템플릿. 기존 사용자 파일은 덮어쓰지 않는다. |
-| `tests/run_tests.py` | 164개 통합 확인(권한 보안 32개 focused test 포함). 가짜 `codex`와 임시 fixture로 실행 경로·신호·정리 실패·로컬 상태·ROSTER probe·핫픽스 안전장치를 검증(진짜 Codex 미호출, 실제 OMX 미수정) |
+| `tests/run_tests.py` | 164개 통합 확인(권한 보안 33개 focused test 포함). 가짜 `codex`와 임시 fixture로 실행 경로·신호·정리 실패·로컬 상태·ROSTER probe·핫픽스 안전장치를 검증(진짜 Codex 미호출, 실제 OMX 미수정) |
 
 ## Host-local state 권한
 
@@ -283,7 +283,7 @@ python3 scripts/ledger_distribution.py --check templates/LEDGER.md
 - ROSTER의 `[실측]` 우위는 선택한 live LEDGER에서 **사람이 채점한 결과 3건 이상**일 때만 쓸 수 있다.
   기계 실행 결과만으로 우열을 채우거나 승격하지 않는다.
 - 가드·경로·실패·중단·정리·로컬 상태·ROSTER probe·빈 공개 LEDGER 템플릿 집계·OMX 핫픽스
-  안전장치 **164개 통합 확인 통과**(state 권한 focused test 32개 포함).
+  안전장치 **164개 통합 확인 통과**(state 권한 focused test 33개 포함).
 - 공개본에는 개인 작업 이력과 호스트 환경 보고서를 싣지 않는다.
 
 ## 경계

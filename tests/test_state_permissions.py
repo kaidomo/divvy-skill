@@ -228,6 +228,33 @@ class ValidationAndMigrationTests(unittest.TestCase):
             self.assertEqual((mode(fx.ledger), mode(fx.roster)), (0o600, 0o600))
             self.assertIn("status=no-op", second.stdout)
 
+    def test_noop_skips_post_mutation_content_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            fx = Fixture(Path(raw))
+            for path in (fx.ledger, fx.roster):
+                path.write_bytes(b"private")
+                os.chmod(path, 0o600)
+            real_hash_fd = STATE._hash_fd
+            calls = 0
+
+            def mutate_after_initial_validation(fd: int) -> str:
+                nonlocal calls
+                calls += 1
+                result = real_hash_fd(fd)
+                if calls == 2:
+                    fx.ledger.write_bytes(b"changed concurrently")
+                return result
+
+            rc, out, err, error = invoke(
+                "migrate-permissions", fx.env(),
+                mock.patch.object(STATE, "_hash_fd", side_effect=mutate_after_initial_validation),
+            )
+            self.assertIsNone(error)
+            self.assertEqual(rc, 0)
+            self.assertEqual(calls, 2)
+            self.assertIn("status=no-op", out)
+            self.assertNotIn("status=PARTIAL", out + err)
+
     def test_symlink_file_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             fx = Fixture(Path(raw))
