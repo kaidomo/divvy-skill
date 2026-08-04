@@ -8,6 +8,7 @@ module never resolves, reads, or changes the caller's real ROSTER/LEDGER paths.
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
 import importlib.util
 import io
@@ -178,6 +179,29 @@ class CreationAndOverrideTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((mode(state_parent), mode(config_parent)), (0o750, 0o750))
             self.assertEqual((mode(state_leaf), mode(config_leaf)), (0o700, 0o700))
+
+    def test_descend_closes_child_fd_when_directory_validation_fails(self) -> None:
+        for descend in (STATE._descend_or_create, STATE._descend_existing):
+            with self.subTest(descend=descend.__name__), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                (root / "child").mkdir()
+                parent_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                validated_fds: list[int] = []
+
+                def reject_directory(fd: int, *, require_owner: bool) -> None:
+                    validated_fds.append(fd)
+                    raise STATE.StateError("owner_mismatch", "injected validation failure")
+
+                try:
+                    with mock.patch.object(STATE, "_validate_directory_fd", side_effect=reject_directory):
+                        with self.assertRaises(STATE.StateError):
+                            descend(parent_fd, ["child"])
+                    self.assertEqual(len(validated_fds), 1)
+                    with self.assertRaises(OSError) as closed:
+                        os.fstat(validated_fds[0])
+                    self.assertEqual(closed.exception.errno, errno.EBADF)
+                finally:
+                    os.close(parent_fd)
 
     def test_missing_xdg_parent_is_refused_before_target_creation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

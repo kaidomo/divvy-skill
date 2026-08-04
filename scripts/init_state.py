@@ -224,9 +224,9 @@ def _descend_or_create(parent_fd: int, components: List[str]) -> int:
     current = os.dup(parent_fd)
     try:
         for part in components:
+            enforce_mode = False
             try:
                 child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current)
-                _validate_directory_fd(child, require_owner=True)
             except FileNotFoundError:
                 try:
                     os.mkdir(part, 0o700, dir_fd=current)
@@ -235,8 +235,7 @@ def _descend_or_create(parent_fd: int, components: List[str]) -> int:
                     # directory after our failed open.
                     pass
                 child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=current)
-                _validate_directory_fd(child, require_owner=True)
-                os.fchmod(child, 0o700)
+                enforce_mode = True
             except OSError as exc:
                 try:
                     entry = os.stat(part, dir_fd=current, follow_symlinks=False)
@@ -245,8 +244,12 @@ def _descend_or_create(parent_fd: int, components: List[str]) -> int:
                 if exc.errno == errno.ELOOP or (entry is not None and stat.S_ISLNK(entry.st_mode)):
                     raise StateError("symlink_refused", "symlinked directory component refused") from exc
                 raise
-            os.close(current)
+            previous = current
             current = child
+            os.close(previous)
+            _validate_directory_fd(current, require_owner=True)
+            if enforce_mode:
+                os.fchmod(current, 0o700)
         return current
     except BaseException:
         os.close(current)
@@ -300,9 +303,10 @@ def _descend_existing(parent_fd: int, components: List[str]) -> int:
                 if exc.errno == errno.ELOOP or (entry is not None and stat.S_ISLNK(entry.st_mode)):
                     raise StateError("symlink_refused", "symlinked directory component refused") from exc
                 raise
-            _validate_directory_fd(child, require_owner=True)
-            os.close(current)
+            previous = current
             current = child
+            os.close(previous)
+            _validate_directory_fd(current, require_owner=True)
         return current
     except BaseException:
         os.close(current)
