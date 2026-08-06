@@ -144,12 +144,16 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("contents: write", release)
         self.assertIn("RELEASE_APP_PRIVATE_KEY", release)
         self.assertIn("RELEASE_SIGNING_KEY", release)
-        self.assertIn("BLOCKED_REPOSITORY_POLICY", release)
+        self.assertNotIn("BLOCKED_REPOSITORY_POLICY", release)
+        self.assertIn("mint-app-token", release)
+        self.assertIn("git push --atomic", release)
+        self.assertIn("PUBLIC_RELEASE_MISMATCH", release)
+        self.assertIn("Release-Expected-Parent", release)
         self.assertIn("github.event.repository.full_name", release)
         self.assertNotIn("pull_request_target", release)
         self.assertIn("fetch-depth: 2", ci)
         self.assertEqual(ci.count("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"), 1)
-        self.assertEqual(release.count("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"), 1)
+        self.assertEqual(release.count("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"), 2)
 
 
 class AutomaticReleaseContractTests(unittest.TestCase):
@@ -307,6 +311,60 @@ class AutomaticReleaseContractTests(unittest.TestCase):
         self.assertEqual(json.loads(schema.read_text())["schema_version"], 1)
         self.assertGreaterEqual(len(json.loads(vectors.read_text())["vectors"]), 8)
         self.assertEqual(len(RELEASE.file_sha256(schema)), 64)
+
+    def test_github_event_plan_binds_immutable_evidence(self) -> None:
+        sha = "a" * 40
+        event = {"repository": {"full_name": "kaidomo/divvy-skill"}, "ref": "refs/heads/main", "after": sha}
+        associations = [[{"number": 12, "base": {"ref": "main"}, "state": "closed",
+                          "merge_commit_sha": sha, "merged_at": "2026-08-06T10:00:00Z",
+                          "merged_by": {"login": "kaidomo"}}]]
+        timeline = [[{"id": 1, "event": "labeled", "label": {"name": "release:minor"},
+                     "actor": {"login": "kaidomo"}, "created_at": "2026-08-06T09:00:00Z"}]]
+        result = RELEASE.plan_event(event, associations, timeline, "fix: repair (#12)\n",
+                                    {"kaidomo"}, "0.1.0", "v0.1.0", set())
+        self.assertEqual(result["candidate_version"], "0.2.0")
+        self.assertEqual(result["source_frontier"], sha)
+        self.assertEqual(result["released_prs"], [12])
+
+    def test_release_comparison_ignores_mutable_target_commitish_field(self) -> None:
+        expected = {"tag_name": "v0.2.0", "target_commitish": "a" * 40, "name": "v0.2.0",
+                    "body": "notes\n", "draft": False, "prerelease": False}
+        observed = dict(expected, target_commitish="main")
+        self.assertEqual(RELEASE.compare_release(expected, observed), "MATCHING_NOOP")
+
+    def test_plan_batch_coalesces_ordered_skip_and_feature(self) -> None:
+        first_sha, second_sha = "a" * 40, "b" * 40
+        event = {"repository": {"full_name": "kaidomo/divvy-skill"}, "ref": "refs/heads/main",
+                 "after": second_sha}
+        def evidence(number, sha, title, label=None):
+            timeline = [] if label is None else [{"id": number, "event": "labeled",
+                "label": {"name": label}, "actor": {"login": "kaidomo"},
+                "created_at": "2026-08-06T09:00:00Z"}]
+            return {"sha": sha, "commit_message": f"{title} (#{number})\n", "timeline": [timeline],
+                    "associations": [[{"number": number, "base": {"ref": "main"}, "state": "closed",
+                    "merge_commit_sha": sha, "merged_at": "2026-08-06T10:00:00Z",
+                    "merged_by": {"login": "kaidomo"}}]]}
+        result = RELEASE.plan_batch(event, [
+            evidence(20, first_sha, "chore: deferred", "release:skip"),
+            evidence(21, second_sha, "feat: capability"),
+        ], {"kaidomo"}, "0.1.0", "v0.1.0", set())
+        self.assertEqual(result["skipped_prs"], [20])
+        self.assertEqual(result["released_prs"], [21])
+        self.assertEqual(result["candidate_version"], "0.2.0")
+
+    def test_rendered_changelog_section_equals_release_body(self) -> None:
+        body = "- fix: repair (#7)\n\n<!-- release-provenance: abc -->\n"
+        rendered = RELEASE.render_metadata("# Changelog\n\n## [Unreleased]\n", "0.1.1", body,
+                                           "2026-08-06", "abc")
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            fixture(root, version="0.1.1")
+            (root / "CHANGELOG.md").write_text(rendered, encoding="utf-8")
+            self.assertEqual(RELEASE.release_notes(root, "0.1.1"), body)
+
+    def test_app_token_scope_fails_before_network_for_other_repository(self) -> None:
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "APP_SCOPE_MISMATCH"):
+            RELEASE.mint_app_token("1", "2", "private", "kaidomo/other")
 
 
 if __name__ == "__main__":

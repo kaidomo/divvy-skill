@@ -62,6 +62,10 @@ App/signing secret 이름을 참조한다. 기본 workflow token은 read-only이
 environment/variables/secret names, public bot signer, CODEOWNERS human review, Release immutability 지원 여부.
 private key/token/passphrase 값은 로그·PR·receipt에 기록하지 않는다.
 
+Divvy R1 canary는 전용 단일-repository App의 actor-wide direct bypass 모델을 선택했다. 이 선택은
+workflow의 metadata-only path 및 pre-secret revision/batch 검증을 구현하기 위한 것이며, App 설치나
+ruleset·environment·secret·signer 변경 자체의 권한은 아니다. 그 설정은 별도 packet과 readback 없이는 활성화하지 않는다.
+
 ## 실패와 복구
 
 - metadata 전 실패: 현재 main/tag/coverage를 다시 읽고 한 번만 재계산한다.
