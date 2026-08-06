@@ -1,0 +1,10 @@
+/.github/workflows/ @kaidomo
+/.github/release_label_actors @kaidomo
+/.github/release_allowed_signers @kaidomo
+/.github/release_conformance/ @kaidomo
+/scripts/release.py @kaidomo
+/tests/test_release.py @kaidomo
+/VERSION @kaidomo
+/CHANGELOG.md @kaidomo
+/RELEASING.md @kaidomo
+/CONTRIBUTING.md @kaidomo

@@ -2,43 +2,124 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      schema_version: {required: true, type: string}
+      batch_id: {required: true, type: string}
+      frontier: {required: true, type: string}
+      prior_tag: {required: true, type: string}
+      pr_set_digest: {required: true, type: string}
+      label_note_digest: {required: true, type: string}
+      metadata_tree: {required: true, type: string}
+      candidate_version: {required: true, type: string}
+      expected_phase: {required: true, type: choice, options: [none, metadata, tag, release]}
+      stop_owner: {required: true, type: string}
 
 permissions:
-  contents: write
+  contents: read
+  pull-requests: read
 
 concurrency:
-  group: release
-  cancel-in-progress: false
+  group: release-${{ github.repository }}-main
+  queue: max
 
 jobs:
-  publish:
+  authorize-and-test:
     runs-on: macos-latest
+    outputs:
+      authorization_digest: ${{ steps.freeze.outputs.authorization_digest }}
+      source_frontier: ${{ steps.freeze.outputs.source_frontier }}
+      workflow_revision: ${{ steps.freeze.outputs.workflow_revision }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Require the current main commit and an annotated tag
+          persist-credentials: false
+      - name: Freeze repository, ref, workflow revision, and source frontier
+        id: freeze
+        env:
+          EXPECTED_REPOSITORY: kaidomo/divvy-skill
         run: |
-          git fetch origin main
-          test "$GITHUB_SHA" = "$(git rev-parse origin/main)"
-          test "$(git cat-file -t "$GITHUB_REF_NAME")" = "tag"
-      - name: Validate tag and release metadata
-        run: python3 scripts/release.py check --tag "$GITHUB_REF_NAME" --history
-      - name: Run tests
-        run: env -u CODEX_SANDBOX python3 tests/run_tests.py
-      - name: Check LEDGER distribution
-        run: python3 scripts/ledger_distribution.py --check templates/LEDGER.md
-      - name: Render release notes
-        run: python3 scripts/release.py notes --output release-notes.md
-      - name: Publish GitHub Release
+          set -eu
+          test "${{ github.event.repository.full_name }}" = "$EXPECTED_REPOSITORY"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          test -z "$(git status --porcelain)"
+          workflow_revision="$(git rev-parse HEAD:.github/workflows/release.yml)"
+          authorization_digest="$(python3 - "$GITHUB_SHA" "$workflow_revision" <<'PY'
+          import hashlib, json, sys
+          print(hashlib.sha256(json.dumps({
+              "repository": "kaidomo/divvy-skill",
+              "ref": "refs/heads/main",
+              "source_frontier": sys.argv[1],
+              "workflow_revision": sys.argv[2],
+          }, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+          PY
+          )"
+          echo "source_frontier=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "workflow_revision=$workflow_revision" >> "$GITHUB_OUTPUT"
+          echo "authorization_digest=$authorization_digest" >> "$GITHUB_OUTPUT"
+      - name: Validate local release controls
+        run: |
+          python3 scripts/release.py check
+          python3 tests/test_release.py
+          env -u CODEX_SANDBOX python3 tests/run_tests.py
+          python3 scripts/ledger_distribution.py --check templates/LEDGER.md
+          git diff --check
+      - name: Refuse fork-head or unreviewed sensitive-path execution
+        run: |
+          python3 scripts/release.py authorize <<'JSON'
+          {"event_origin":"protected-main","base":"main","changed_paths":[]}
+          JSON
+
+  commit-sign-tag:
+    needs: authorize-and-test
+    runs-on: macos-latest
+    environment: release-automation
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Require frozen authorize output before secret use
+        env:
+          AUTHORIZATION_DIGEST: ${{ needs.authorize-and-test.outputs.authorization_digest }}
+          SOURCE_FRONTIER: ${{ needs.authorize-and-test.outputs.source_frontier }}
+          WORKFLOW_REVISION: ${{ needs.authorize-and-test.outputs.workflow_revision }}
+        run: |
+          set -eu
+          test -n "$AUTHORIZATION_DIGEST"
+          test -n "$SOURCE_FRONTIER"
+          test -n "$WORKFLOW_REVISION"
+          test "$GITHUB_REF" = "refs/heads/main"
+      - name: Require repository-scoped App and signing configuration
+        env:
+          RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+          RELEASE_APP_INSTALLATION_ID: ${{ vars.RELEASE_APP_INSTALLATION_ID }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_SIGNING_KEY_PASSPHRASE: ${{ secrets.RELEASE_SIGNING_KEY_PASSPHRASE }}
+        run: |
+          set -eu
+          test -n "$RELEASE_APP_ID"
+          test -n "$RELEASE_APP_INSTALLATION_ID"
+          test -n "$RELEASE_APP_PRIVATE_KEY"
+          test -n "$RELEASE_SIGNING_KEY"
+          echo "::add-mask::$RELEASE_APP_INSTALLATION_ID"
+          echo "::error::BLOCKED_REPOSITORY_POLICY: activation requires a user-origin choice between actor-wide App bypass and metadata-PR fallback, plus exact App/signer readback"
+          exit 2
+
+  publish:
+    needs: commit-sign-tag
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout-free exact Release reconciliation
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          --repo "$GITHUB_REPOSITORY"
-          --verify-tag
-          --fail-on-no-commits
-          --title "$GITHUB_REF_NAME"
-          --notes-file release-notes.md
+        run: |
+          set -eu
+          test "$GITHUB_REPOSITORY" = "kaidomo/divvy-skill"
+          echo "Publish is permitted only after the prior job reports a trusted immutable tag and exact tagged-snapshot notes."
