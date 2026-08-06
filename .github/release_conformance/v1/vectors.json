@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "vectors": [
+    {"name": "feat", "current_version": "0.1.0", "title": "feat: capability", "labels": [], "result": "minor"},
+    {"name": "fix", "current_version": "0.1.0", "title": "fix: repair", "labels": [], "result": "patch"},
+    {"name": "breaking-0x", "current_version": "0.1.0", "title": "feat!: replace", "labels": [], "result": "minor"},
+    {"name": "unknown", "current_version": "0.1.0", "title": "docs: clarify", "labels": [], "result": "patch"},
+    {"name": "skip", "current_version": "0.1.0", "title": "feat: later", "labels": ["release:skip"], "result": "skip"},
+    {"name": "minor-override", "current_version": "0.1.0", "title": "fix: repair", "labels": ["release:minor"], "result": "minor"},
+    {"name": "skip-conflict", "current_version": "0.1.0", "title": "fix: repair", "labels": ["release:skip", "release:patch"], "result": "LABEL_CONFLICT"},
+    {"name": "floor-conflict", "current_version": "0.1.0", "title": "feat: capability", "labels": ["release:patch"], "result": "LABEL_FLOOR_CONFLICT"}
+  ]
+}
