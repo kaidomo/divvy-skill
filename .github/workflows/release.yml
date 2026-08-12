@@ -103,6 +103,7 @@ jobs:
             test "$(trailer Release-Metadata-Tree)" = "$INPUT_METADATA_TREE"
             test "$(trailer Release-Candidate)" = "$INPUT_CANDIDATE_VERSION"
             test "$(trailer Release-Expected-Parent)" = "$INPUT_EXPECTED_PARENT"
+            test "$(trailer Release-Stop-Owner)" = "$INPUT_STOP_OWNER"
             test "$(git rev-parse "$metadata_sha^")" = "$INPUT_FRONTIER"
             test "$(git rev-parse "$metadata_sha^{tree}")" = "$INPUT_METADATA_TREE"
             changed_paths="$(git diff-tree --no-commit-id --name-only -r "$metadata_sha")"
@@ -351,7 +352,6 @@ jobs:
           repair="$(python3 -c 'import json,sys; print("true" if json.load(open(sys.argv[1])).get("repair") else "false")' "$plan")"
           if test "$repair" = true; then
             metadata_sha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["metadata_sha"])' "$plan")"
-            test "$metadata_sha" = "$CHECKOUT_SHA"
             test "$(git rev-parse "$metadata_sha^{tree}")" = "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["metadata_tree"])' "$plan")"
             test "$(git rev-parse "$metadata_sha^")" = "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["expected_parent"])' "$plan")"
             git merge-base --is-ancestor "$metadata_sha" origin/main
@@ -492,6 +492,11 @@ jobs:
         run: |
           set -eu
           test "$GITHUB_REPOSITORY" = "kaidomo/divvy-skill"
+          git remote set-url origin "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git"
+          cleanup() { git remote set-url origin "https://github.com/$GITHUB_REPOSITORY.git"; }
+          trap cleanup EXIT
+          git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
+          python3 scripts/release.py verify-tag "$TAG" --target "$METADATA_SHA"
           notes="$RUNNER_TEMP/release-notes.md"
           printf '%s' "$NOTES_B64" | base64 --decode > "$notes"
           expected="$RUNNER_TEMP/expected-release.json"
