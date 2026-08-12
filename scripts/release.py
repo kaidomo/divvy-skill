@@ -604,7 +604,7 @@ def mint_app_token(
     permissions = payload.get("permissions", {})
     if not token or repositories != {repository}:
         raise ReleaseError("APP_SCOPE_MISMATCH: returned repository set")
-    if permissions.get("contents") != "write":
+    if permissions != {"contents": "write", "metadata": "read"}:
         raise ReleaseError("APP_PERMISSION_MISMATCH")
     ttl = int((expiry - datetime.now(timezone.utc)).total_seconds())
     if ttl <= 0 or ttl > 3600:

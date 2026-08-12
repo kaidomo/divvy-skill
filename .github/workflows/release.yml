@@ -435,7 +435,7 @@ jobs:
           echo "batch_id=$batch_id" >> "$GITHUB_OUTPUT"
 
   publish:
-    needs: commit-sign-tag
+    needs: [authorize-and-test, commit-sign-tag]
     runs-on: macos-latest
     environment: release-automation
     permissions:
@@ -446,6 +446,26 @@ jobs:
           ref: ${{ needs.commit-sign-tag.outputs.metadata_sha }}
           fetch-depth: 1
           persist-credentials: false
+      - name: Revalidate frozen authorization before secret access
+        env:
+          AUTHORIZATION_DIGEST: ${{ needs.authorize-and-test.outputs.authorization_digest }}
+          PLAN_B64: ${{ needs.authorize-and-test.outputs.plan_b64 }}
+          WORKFLOW_REVISION: ${{ needs.authorize-and-test.outputs.workflow_revision }}
+          METADATA_SHA: ${{ needs.commit-sign-tag.outputs.metadata_sha }}
+        run: |
+          set -eu
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$METADATA_SHA"
+          test "$WORKFLOW_REVISION" = "$(git rev-parse HEAD:.github/workflows/release.yml)"
+          plan="$RUNNER_TEMP/release-plan.publish-pre-secret.json"
+          printf '%s' "$PLAN_B64" | base64 --decode > "$plan"
+          observed="$(python3 - "$plan" "$WORKFLOW_REVISION" <<'PY'
+          import hashlib, json, sys
+          plan = json.load(open(sys.argv[1])); plan["workflow_revision"] = sys.argv[2]
+          print(hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+          PY
+          )"
+          test "$observed" = "$AUTHORIZATION_DIGEST"
       - name: Mint one repository-scoped short-lived App token
         id: app
         env:
