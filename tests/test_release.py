@@ -234,6 +234,16 @@ class AutomaticReleaseContractTests(unittest.TestCase):
         with self.assertRaisesRegex(RELEASE.ReleaseError, "POST_MERGE_LABEL_MUTATION"):
             RELEASE.labels_at_merge(events, "2026-08-06T10:00:00Z", {"kaidomo"}, pages_complete=True)
 
+    def test_timeline_ids_are_numeric_and_merge_boundary_is_ambiguous(self) -> None:
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "INVALID_TIMELINE_EVENT_ID"):
+            RELEASE.labels_at_merge([{"id": "10", "event": "labeled", "label": {"name": "release:skip"},
+                                      "actor": {"login": "kaidomo"}, "created_at": "2026-08-06T09:00:00Z"}],
+                                    "2026-08-06T10:00:00Z", {"kaidomo"}, pages_complete=True)
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "POST_MERGE_LABEL_MUTATION"):
+            RELEASE.labels_at_merge([{"id": 10, "event": "labeled", "label": {"name": "release:skip"},
+                                      "actor": {"login": "kaidomo"}, "created_at": "2026-08-06T10:00:00Z"}],
+                                    "2026-08-06T10:00:00Z", {"kaidomo"}, pages_complete=True)
+
     def test_commit_message_binding_accepts_merge_and_squash_only(self) -> None:
         self.assertEqual(
             RELEASE.immutable_title("Merge pull request #7 from x/y\n\nfeat: safe title\n", 7),
@@ -287,7 +297,7 @@ class AutomaticReleaseContractTests(unittest.TestCase):
     def test_partial_resume_requires_full_identity(self) -> None:
         expected = {"schema_version": 1, "batch_id": "b", "frontier": "f", "prior_tag": "v0.1.0",
                     "pr_set_digest": "p", "label_note_digest": "n", "metadata_tree": "t",
-                    "candidate_version": "0.1.1", "expected_parent": "f"}
+                    "candidate_version": "0.1.1", "expected_parent": "f", "stop_owner": "release-automation"}
         self.assertEqual(RELEASE.resume_phase(expected, dict(expected), "metadata"), "TAG_PENDING")
         wrong = dict(expected, metadata_tree="wrong")
         with self.assertRaisesRegex(RELEASE.ReleaseError, "RESUME_IDENTITY_MISMATCH"):

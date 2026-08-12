@@ -105,6 +105,10 @@ jobs:
             test "$(trailer Release-Expected-Parent)" = "$INPUT_EXPECTED_PARENT"
             test "$(git rev-parse "$metadata_sha^")" = "$INPUT_FRONTIER"
             test "$(git rev-parse "$metadata_sha^{tree}")" = "$INPUT_METADATA_TREE"
+            changed_paths="$(git diff-tree --no-commit-id --name-only -r "$metadata_sha")"
+            test -n "$changed_paths"
+            test -z "$(printf '%s\n' "$changed_paths" | grep -Ev '^(VERSION|CHANGELOG.md)$' || true)"
+            test "$(git show -s --format='%an' "$metadata_sha")" = 'divvy-release[bot]'
             snapshot="$RUNNER_TEMP/tagged-snapshot"
             mkdir "$snapshot"
             git show "$metadata_sha:VERSION" > "$snapshot/VERSION"
@@ -162,7 +166,7 @@ jobs:
             changed_paths="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA")"
             test -n "$changed_paths"
             test -z "$(printf '%s\n' "$changed_paths" | grep -Ev '^(VERSION|CHANGELOG.md)$' || true)"
-            for trailer in Release-Batch Release-Frontier Release-Prior-Tag Release-PR-Set-Digest Release-Label-Note-Digest Release-Metadata-Tree Release-Candidate Release-Expected-Parent; do
+            for trailer in Release-Batch Release-Frontier Release-Prior-Tag Release-PR-Set-Digest Release-Label-Note-Digest Release-Metadata-Tree Release-Candidate Release-Expected-Parent Release-Stop-Owner; do
               test "$(grep -c "^$trailer: " "$commit_message")" = 1
             done
             trailer() { sed -n "s/^$1: //p" "$commit_message"; }
@@ -174,12 +178,14 @@ jobs:
             metadata_tree="$(trailer Release-Metadata-Tree)"
             candidate="$(trailer Release-Candidate)"
             expected_parent="$(trailer Release-Expected-Parent)"
+            stop_owner="$(trailer Release-Stop-Owner)"
             case "$batch_id$pr_digest$label_note_digest" in (*[!0-9a-f]*|'') exit 2;; esac
             test "${#batch_id}" = 64
             test "${#pr_digest}" = 64
             test "${#label_note_digest}" = 64
             test "$frontier" = "$(git rev-parse HEAD^)"
             test "$expected_parent" = "$frontier"
+            test -n "$stop_owner"
             test "$metadata_tree" = "$(git rev-parse HEAD^{tree})"
             test "$candidate" = "$(python3 scripts/release.py current)"
             test "$(git show -s --format='%an' HEAD)" = 'divvy-release[bot]'
@@ -417,11 +423,12 @@ jobs:
           label_note_digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["label_note_digest"])' "$plan")"
           git add VERSION CHANGELOG.md
           metadata_tree="$(git write-tree)"
-          git commit -m "chore(release): v$version" \
+            git commit -m "chore(release): v$version" \
             -m "Release-Schema: 1" -m "Release-Batch: $batch_id" -m "Release-Frontier: $SOURCE_FRONTIER" \
             -m "Release-Prior-Tag: $prior_tag" -m "Release-PR-Set-Digest: $pr_digest" \
             -m "Release-Label-Note-Digest: $label_note_digest" -m "Release-Metadata-Tree: $metadata_tree" \
-            -m "Release-Candidate: $version" -m "Release-Expected-Parent: $SOURCE_FRONTIER"
+            -m "Release-Candidate: $version" -m "Release-Expected-Parent: $SOURCE_FRONTIER" \
+            -m "Release-Stop-Owner: release-automation"
           metadata_sha="$(git rev-parse HEAD)"
           test "$(git rev-parse HEAD^)" = "$SOURCE_FRONTIER"
           tag="v$version"

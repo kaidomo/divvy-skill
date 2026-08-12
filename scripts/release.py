@@ -46,6 +46,7 @@ REPAIR_IDENTITY_FIELDS = (
     "metadata_tree",
     "candidate_version",
     "expected_parent",
+    "stop_owner",
 )
 
 
@@ -246,7 +247,13 @@ def labels_at_merge(
     boundary = parse_timestamp(merge_time)
     present: Set[str] = set()
     seen: Set[Any] = set()
-    ordered = sorted(events, key=lambda event: (event.get("created_at", ""), str(event.get("id", ""))))
+    normalized = []
+    for event in events:
+        event_id = event.get("id")
+        if isinstance(event_id, bool) or not isinstance(event_id, int) or event_id < 0:
+            raise ReleaseError("INVALID_TIMELINE_EVENT_ID")
+        normalized.append(event)
+    ordered = sorted(normalized, key=lambda event: (event.get("created_at", ""), event["id"]))
     for event in ordered:
         event_id = event.get("id")
         if event_id in seen:
@@ -256,7 +263,7 @@ def labels_at_merge(
         if label not in RELEASE_LABELS:
             continue
         occurred = parse_timestamp(event.get("created_at", ""))
-        if occurred > boundary:
+        if occurred >= boundary:
             raise ReleaseError(f"POST_MERGE_LABEL_MUTATION: {label}")
         actor = (event.get("actor") or {}).get("login")
         if actor not in allowed_actors:
