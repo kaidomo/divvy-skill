@@ -287,9 +287,11 @@ python3 scripts/release.py check                # VERSION + CHANGELOG 정합
 python3 scripts/release.py check --tag "v$(python3 scripts/release.py current)" --history
 ```
 
-릴리즈 PR이 병합된 뒤 최신 `main`에 서명 태그를 push하면 GitHub Actions가 태그·버전 이력·정확한
-`main` head·전체 테스트를 검증하고 Release를 생성한다. 버전 정책, 정확한 명령, 서명 검증과 실패 복구는
-[`RELEASING.md`](./RELEASING.md)를 따른다. 태그 push는 별도 공개 승인 경계다.
+보호된 `main`에 PR이 병합되면 기본적으로 릴리즈 queue가 immutable merge evidence를 검증하고
+`VERSION`·CHANGELOG·trusted signed annotated tag·GitHub Release를 같은 tagged snapshot에 맞춘다.
+허용된 actor가 merge 시점에 설정한 `release:skip`만 즉시 cut을 생략한다. 이후 main이 진행돼도 공개 태그를
+최신 tip으로 옮기지 않는다. 버전 floor, label conflict, signer trust, partial resume와 권한 경계는
+[`RELEASING.md`](./RELEASING.md)를 따른다.
 
 **위 "위임 실행" 절의 약속들(read-only 기본·기존 출력 보호·잠금·신호 전달·자손 정리·백업 복구·
 성공 3조건·종료코드)은 각각 대응하는 테스트가 고정한다.** 문서를 읽는 것만으로는 확인할 수 없으니,

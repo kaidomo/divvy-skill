@@ -2,43 +2,528 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      schema_version: {required: true, type: string}
+      batch_id: {required: true, type: string}
+      frontier: {required: true, type: string}
+      prior_tag: {required: true, type: string}
+      pr_set_digest: {required: true, type: string}
+      label_note_digest: {required: true, type: string}
+      metadata_tree: {required: true, type: string}
+      candidate_version: {required: true, type: string}
+      expected_parent: {required: true, type: string}
+      expected_phase: {required: true, type: choice, options: [none, metadata, tag, release]}
+      stop_owner: {required: true, type: string}
 
 permissions:
-  contents: write
+  contents: read
+  pull-requests: read
+  issues: read
 
 concurrency:
-  group: release
-  cancel-in-progress: false
+  group: release-${{ github.repository }}-main
+  queue: max
 
 jobs:
-  publish:
+  authorize-and-test:
     runs-on: macos-latest
+    outputs:
+      authorization_digest: ${{ steps.plan.outputs.authorization_digest }}
+      source_frontier: ${{ steps.plan.outputs.source_frontier }}
+      checkout_sha: ${{ steps.plan.outputs.checkout_sha }}
+      workflow_revision: ${{ steps.plan.outputs.workflow_revision }}
+      effect_required: ${{ steps.plan.outputs.effect_required }}
+      plan_b64: ${{ steps.plan.outputs.plan_b64 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Require the current main commit and an annotated tag
+          persist-credentials: false
+      - name: Validate release controls without effect credentials
         run: |
-          git fetch origin main
-          test "$GITHUB_SHA" = "$(git rev-parse origin/main)"
-          test "$(git cat-file -t "$GITHUB_REF_NAME")" = "tag"
-      - name: Validate tag and release metadata
-        run: python3 scripts/release.py check --tag "$GITHUB_REF_NAME" --history
-      - name: Run tests
-        run: env -u CODEX_SANDBOX python3 tests/run_tests.py
-      - name: Check LEDGER distribution
-        run: python3 scripts/ledger_distribution.py --check templates/LEDGER.md
-      - name: Render release notes
-        run: python3 scripts/release.py notes --output release-notes.md
-      - name: Publish GitHub Release
+          python3 scripts/release.py check
+          python3 tests/test_release.py
+          env -u CODEX_SANDBOX python3 tests/run_tests.py
+          python3 scripts/ledger_distribution.py --check templates/LEDGER.md
+          git diff --check
+      - name: Freeze immutable PR evidence and authorize exact effect
+        id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          --repo "$GITHUB_REPOSITORY"
-          --verify-tag
-          --fail-on-no-commits
-          --title "$GITHUB_REF_NAME"
-          --notes-file release-notes.md
+          EXPECTED_REPOSITORY: kaidomo/divvy-skill
+          INPUT_SCHEMA_VERSION: ${{ inputs.schema_version }}
+          INPUT_BATCH_ID: ${{ inputs.batch_id }}
+          INPUT_FRONTIER: ${{ inputs.frontier }}
+          INPUT_PRIOR_TAG: ${{ inputs.prior_tag }}
+          INPUT_PR_SET_DIGEST: ${{ inputs.pr_set_digest }}
+          INPUT_LABEL_NOTE_DIGEST: ${{ inputs.label_note_digest }}
+          INPUT_METADATA_TREE: ${{ inputs.metadata_tree }}
+          INPUT_CANDIDATE_VERSION: ${{ inputs.candidate_version }}
+          INPUT_EXPECTED_PARENT: ${{ inputs.expected_parent }}
+          INPUT_EXPECTED_PHASE: ${{ inputs.expected_phase }}
+          INPUT_STOP_OWNER: ${{ inputs.stop_owner }}
+        run: |
+          set -eu
+          test "${{ github.event.repository.full_name }}" = "$EXPECTED_REPOSITORY"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          test -z "$(git status --porcelain)"
+          workflow_revision="$(git rev-parse HEAD:.github/workflows/release.yml)"
+          commit_message="$RUNNER_TEMP/commit-message.txt"
+          git show -s --format=%B "$GITHUB_SHA" > "$commit_message"
+
+          if test "$GITHUB_EVENT_NAME" = workflow_dispatch; then
+            test "$INPUT_SCHEMA_VERSION" = 1
+            case "$INPUT_BATCH_ID$INPUT_PR_SET_DIGEST$INPUT_LABEL_NOTE_DIGEST" in (*[!0-9a-f]*|'') exit 2;; esac
+            test "${#INPUT_BATCH_ID}" = 64
+            test "${#INPUT_PR_SET_DIGEST}" = 64
+            test "${#INPUT_LABEL_NOTE_DIGEST}" = 64
+            case "$INPUT_FRONTIER$INPUT_EXPECTED_PARENT$INPUT_METADATA_TREE" in (*[!0-9a-f]*|'') exit 2;; esac
+            test "${#INPUT_FRONTIER}" = 40
+            test "${#INPUT_EXPECTED_PARENT}" = 40
+            test "${#INPUT_METADATA_TREE}" = 40
+            test "$INPUT_FRONTIER" = "$INPUT_EXPECTED_PARENT"
+            test -n "$INPUT_STOP_OWNER"
+            test "$INPUT_EXPECTED_PHASE" != none
+            matches="$(git log --first-parent --format=%H --fixed-strings --grep="Release-Batch: $INPUT_BATCH_ID")"
+            test "$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')" = 1
+            metadata_sha="$(printf '%s\n' "$matches" | sed '/^$/d')"
+            repair_message="$RUNNER_TEMP/repair-message.txt"
+            git show -s --format=%B "$metadata_sha" > "$repair_message"
+            trailer() { sed -n "s/^$1: //p" "$repair_message"; }
+            test "$(trailer Release-Schema)" = 1
+            test "$(trailer Release-Batch)" = "$INPUT_BATCH_ID"
+            test "$(trailer Release-Frontier)" = "$INPUT_FRONTIER"
+            test "$(trailer Release-Prior-Tag)" = "$INPUT_PRIOR_TAG"
+            test "$(trailer Release-PR-Set-Digest)" = "$INPUT_PR_SET_DIGEST"
+            test "$(trailer Release-Label-Note-Digest)" = "$INPUT_LABEL_NOTE_DIGEST"
+            test "$(trailer Release-Metadata-Tree)" = "$INPUT_METADATA_TREE"
+            test "$(trailer Release-Candidate)" = "$INPUT_CANDIDATE_VERSION"
+            test "$(trailer Release-Expected-Parent)" = "$INPUT_EXPECTED_PARENT"
+            test "$(trailer Release-Stop-Owner)" = "$INPUT_STOP_OWNER"
+            test "$(git rev-parse "$metadata_sha^")" = "$INPUT_FRONTIER"
+            test "$(git rev-parse "$metadata_sha^{tree}")" = "$INPUT_METADATA_TREE"
+            changed_paths="$(git diff-tree --no-commit-id --name-only -r "$metadata_sha")"
+            test -n "$changed_paths"
+            test -z "$(printf '%s\n' "$changed_paths" | grep -Ev '^(VERSION|CHANGELOG.md)$' || true)"
+            test "$(git show -s --format='%an' "$metadata_sha")" = 'divvy-release[bot]'
+            snapshot="$RUNNER_TEMP/tagged-snapshot"
+            mkdir "$snapshot"
+            git show "$metadata_sha:VERSION" > "$snapshot/VERSION"
+            git show "$metadata_sha:CHANGELOG.md" > "$snapshot/CHANGELOG.md"
+            notes="$RUNNER_TEMP/repair-notes.md"
+            python3 - "$snapshot" "$INPUT_CANDIDATE_VERSION" "$notes" <<'PY'
+          import importlib.util, pathlib, sys
+          spec = importlib.util.spec_from_file_location("release", pathlib.Path("scripts/release.py"))
+          module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+          root, version, output = pathlib.Path(sys.argv[1]), sys.argv[2], pathlib.Path(sys.argv[3])
+          if module.read_version(root) != version:
+              raise SystemExit("RESUME_IDENTITY_MISMATCH: VERSION")
+          output.write_text(module.release_notes(root, version), encoding="utf-8")
+          PY
+            tag="v$INPUT_CANDIDATE_VERSION"
+            if test "$INPUT_EXPECTED_PHASE" = metadata; then
+              test -z "$(git tag --list "$tag")"
+            else
+              python3 scripts/release.py verify-tag "$tag" --target "$metadata_sha"
+            fi
+            plan="$RUNNER_TEMP/release-plan.json"
+            python3 - "$notes" "$metadata_sha" "$plan" <<'PY'
+          import json, os, sys
+          payload = {
+              "repair": True, "phase": os.environ["INPUT_EXPECTED_PHASE"],
+              "schema_version": 1, "batch_id": os.environ["INPUT_BATCH_ID"],
+              "source_frontier": os.environ["INPUT_FRONTIER"],
+              "prior_tag": os.environ["INPUT_PRIOR_TAG"],
+              "pr_set_digest": os.environ["INPUT_PR_SET_DIGEST"],
+              "label_note_digest": os.environ["INPUT_LABEL_NOTE_DIGEST"],
+              "metadata_tree": os.environ["INPUT_METADATA_TREE"],
+              "candidate_version": os.environ["INPUT_CANDIDATE_VERSION"],
+              "expected_parent": os.environ["INPUT_EXPECTED_PARENT"],
+              "stop_owner": os.environ["INPUT_STOP_OWNER"],
+              "metadata_sha": sys.argv[2], "notes": open(sys.argv[1], encoding="utf-8").read(),
+          }
+          json.dump(payload, open(sys.argv[3], "w", encoding="utf-8"), sort_keys=True)
+          PY
+            authorization_digest="$(python3 - "$plan" "$workflow_revision" <<'PY'
+          import hashlib, json, sys
+          plan = json.load(open(sys.argv[1])); plan["workflow_revision"] = sys.argv[2]
+          print(hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+          PY
+            )"
+            echo "source_frontier=$INPUT_FRONTIER" >> "$GITHUB_OUTPUT"
+            echo "checkout_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo "workflow_revision=$workflow_revision" >> "$GITHUB_OUTPUT"
+            echo "authorization_digest=$authorization_digest" >> "$GITHUB_OUTPUT"
+            echo "effect_required=true" >> "$GITHUB_OUTPUT"
+            echo "plan_b64=$(base64 < "$plan" | tr -d '\n')" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if grep -q '^Release-Schema: 1$' "$commit_message"; then
+            changed_paths="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA")"
+            test -n "$changed_paths"
+            test -z "$(printf '%s\n' "$changed_paths" | grep -Ev '^(VERSION|CHANGELOG.md)$' || true)"
+            for trailer in Release-Batch Release-Frontier Release-Prior-Tag Release-PR-Set-Digest Release-Label-Note-Digest Release-Metadata-Tree Release-Candidate Release-Expected-Parent Release-Stop-Owner; do
+              test "$(grep -c "^$trailer: " "$commit_message")" = 1
+            done
+            trailer() { sed -n "s/^$1: //p" "$commit_message"; }
+            batch_id="$(trailer Release-Batch)"
+            frontier="$(trailer Release-Frontier)"
+            prior_tag="$(trailer Release-Prior-Tag)"
+            pr_digest="$(trailer Release-PR-Set-Digest)"
+            label_note_digest="$(trailer Release-Label-Note-Digest)"
+            metadata_tree="$(trailer Release-Metadata-Tree)"
+            candidate="$(trailer Release-Candidate)"
+            expected_parent="$(trailer Release-Expected-Parent)"
+            stop_owner="$(trailer Release-Stop-Owner)"
+            case "$batch_id$pr_digest$label_note_digest" in (*[!0-9a-f]*|'') exit 2;; esac
+            test "${#batch_id}" = 64
+            test "${#pr_digest}" = 64
+            test "${#label_note_digest}" = 64
+            test "$frontier" = "$(git rev-parse HEAD^)"
+            test "$expected_parent" = "$frontier"
+            test -n "$stop_owner"
+            test "$metadata_tree" = "$(git rev-parse HEAD^{tree})"
+            test "$candidate" = "$(python3 scripts/release.py current)"
+            test "$(git show -s --format='%an' HEAD)" = 'divvy-release[bot]'
+            test "${{ github.event.sender.login }}" = 'divvy-release[bot]'
+            python3 scripts/release.py verify-tag "v$candidate" --target "$GITHUB_SHA"
+            python3 scripts/release.py check --tag "v$candidate" --history
+            test "$(git rev-list -n 1 "$prior_tag")" = "$frontier" || git merge-base --is-ancestor "$prior_tag" "$frontier"
+            echo "source_frontier=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo "checkout_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo "workflow_revision=$workflow_revision" >> "$GITHUB_OUTPUT"
+            echo "authorization_digest=$(shasum -a 256 "$commit_message" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+            echo "effect_required=false" >> "$GITHUB_OUTPUT"
+            echo "plan_b64=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          test "$GITHUB_EVENT_NAME" = push
+          prior_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -1)"
+          test -n "$prior_tag"
+          python3 scripts/release.py verify-tag "$prior_tag" \
+            --target "$(git rev-list -n 1 "$prior_tag")"
+          if git merge-base --is-ancestor "$GITHUB_SHA" "$prior_tag"; then
+            tag_commit="$(git rev-list -n 1 "$prior_tag")"
+            tag_message="$RUNNER_TEMP/prior-tag-commit-message.txt"
+            git show -s --format=%B "$tag_commit" > "$tag_message"
+            grep -q '^Release-Schema: 1$' "$tag_message"
+            covered_frontier="$(sed -n 's/^Release-Frontier: //p' "$tag_message")"
+            git merge-base --is-ancestor "$GITHUB_SHA" "$covered_frontier"
+            echo "source_frontier=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo "checkout_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            echo "workflow_revision=$workflow_revision" >> "$GITHUB_OUTPUT"
+            echo "authorization_digest=$(shasum -a 256 "$tag_message" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+            echo "effect_required=false" >> "$GITHUB_OUTPUT"
+            echo "plan_b64=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git merge-base --is-ancestor "$prior_tag" "$GITHUB_SHA"
+          evidence="$RUNNER_TEMP/release-evidence"
+          mkdir "$evidence"
+          index=0
+          git rev-list --first-parent --reverse "$prior_tag..$GITHUB_SHA" | while IFS= read -r commit_sha; do
+            case "$commit_sha" in (*[!0-9a-f]*|'') exit 2;; esac
+            index=$((index + 1))
+            item="$evidence/$index"
+            mkdir "$item"
+            printf '%s\n' "$commit_sha" > "$item/sha.txt"
+            git show -s --format=%B "$commit_sha" > "$item/commit-message.txt"
+            ! grep -q '^Release-Schema: ' "$item/commit-message.txt" || { echo 'PARTIAL_REPAIR_REQUIRED'; exit 2; }
+            gh api --paginate --slurp \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/$GITHUB_REPOSITORY/commits/$commit_sha/pulls" > "$item/associations.json"
+            pr_number="$(python3 - "$item/associations.json" <<'PY'
+          import importlib.util, json, pathlib, sys
+          spec = importlib.util.spec_from_file_location("release", pathlib.Path("scripts/release.py"))
+          module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+          print(module.bind_associated_pr(module.flatten_pages(json.load(open(sys.argv[1]))), "main")["number"])
+          PY
+            )"
+            case "$pr_number" in (*[!0-9]*|'') exit 2;; esac
+            gh api --paginate --slurp \
+              -H 'Accept: application/vnd.github.mockingbird-preview+json' \
+              "repos/$GITHUB_REPOSITORY/issues/$pr_number/timeline" > "$item/timeline.json"
+          done
+          plan="$RUNNER_TEMP/release-plan.json"
+          python3 scripts/release.py plan-batch \
+            --event "$GITHUB_EVENT_PATH" \
+            --evidence-dir "$evidence" \
+            --prior-tag "$prior_tag" \
+            --output "$plan"
+          authorization_digest="$(python3 - "$plan" "$workflow_revision" <<'PY'
+          import hashlib, json, sys
+          plan = json.load(open(sys.argv[1])); plan["workflow_revision"] = sys.argv[2]
+          raw = json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()
+          print(hashlib.sha256(raw).hexdigest())
+          PY
+          )"
+          effect_required="$(python3 - "$plan" <<'PY'
+          import json, sys
+          print("true" if json.load(open(sys.argv[1]))["effect_count"] else "false")
+          PY
+          )"
+          echo "source_frontier=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "checkout_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "workflow_revision=$workflow_revision" >> "$GITHUB_OUTPUT"
+          echo "authorization_digest=$authorization_digest" >> "$GITHUB_OUTPUT"
+          echo "effect_required=$effect_required" >> "$GITHUB_OUTPUT"
+          echo "plan_b64=$(base64 < "$plan" | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+  commit-sign-tag:
+    if: needs.authorize-and-test.outputs.effect_required == 'true'
+    needs: authorize-and-test
+    runs-on: macos-latest
+    environment: release-automation
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      metadata_sha: ${{ steps.release.outputs.metadata_sha }}
+      notes_b64: ${{ steps.release.outputs.notes_b64 }}
+      batch_id: ${{ steps.release.outputs.batch_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.authorize-and-test.outputs.checkout_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Revalidate frozen authorization before secret access
+        env:
+          AUTHORIZATION_DIGEST: ${{ needs.authorize-and-test.outputs.authorization_digest }}
+          PLAN_B64: ${{ needs.authorize-and-test.outputs.plan_b64 }}
+          SOURCE_FRONTIER: ${{ needs.authorize-and-test.outputs.source_frontier }}
+          CHECKOUT_SHA: ${{ needs.authorize-and-test.outputs.checkout_sha }}
+          WORKFLOW_REVISION: ${{ needs.authorize-and-test.outputs.workflow_revision }}
+        run: |
+          set -eu
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$CHECKOUT_SHA"
+          test "$WORKFLOW_REVISION" = "$(git rev-parse HEAD:.github/workflows/release.yml)"
+          plan="$RUNNER_TEMP/release-plan.pre-secret.json"
+          printf '%s' "$PLAN_B64" | base64 --decode > "$plan"
+          observed="$(python3 - "$plan" "$WORKFLOW_REVISION" <<'PY'
+          import hashlib, json, sys
+          plan = json.load(open(sys.argv[1])); plan["workflow_revision"] = sys.argv[2]
+          print(hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+          PY
+          )"
+          test "$observed" = "$AUTHORIZATION_DIGEST"
+      - name: Mint one repository-scoped short-lived App token
+        id: app
+        env:
+          RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+          RELEASE_APP_INSTALLATION_ID: ${{ vars.RELEASE_APP_INSTALLATION_ID }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        run: |
+          test -n "${{ needs.authorize-and-test.outputs.authorization_digest }}"
+          python3 scripts/release.py mint-app-token \
+            --repository "$GITHUB_REPOSITORY" --github-output "$GITHUB_OUTPUT"
+      - name: Revalidate authorization and atomically publish metadata plus trusted tag
+        id: release
+        env:
+          PLAN_B64: ${{ needs.authorize-and-test.outputs.plan_b64 }}
+          SOURCE_FRONTIER: ${{ needs.authorize-and-test.outputs.source_frontier }}
+          CHECKOUT_SHA: ${{ needs.authorize-and-test.outputs.checkout_sha }}
+          WORKFLOW_REVISION: ${{ needs.authorize-and-test.outputs.workflow_revision }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_SIGNING_KEY_PASSPHRASE: ${{ secrets.RELEASE_SIGNING_KEY_PASSPHRASE }}
+        run: |
+          set -eu
+          test "$GITHUB_REPOSITORY" = "kaidomo/divvy-skill"
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$WORKFLOW_REVISION" = "$(git rev-parse HEAD:.github/workflows/release.yml)"
+          git remote set-url origin "https://x-access-token:$APP_TOKEN@github.com/$GITHUB_REPOSITORY.git"
+          cleanup() {
+            git remote set-url origin "https://github.com/$GITHUB_REPOSITORY.git"
+            rm -f "$RUNNER_TEMP/release-signing-key" "$RUNNER_TEMP/askpass"
+          }
+          trap cleanup EXIT
+          plan="$RUNNER_TEMP/release-plan.json"
+          printf '%s' "$PLAN_B64" | base64 --decode > "$plan"
+          test "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_frontier"])' "$plan")" = "$SOURCE_FRONTIER"
+          git fetch origin main --tags
+          repair="$(python3 -c 'import json,sys; print("true" if json.load(open(sys.argv[1])).get("repair") else "false")' "$plan")"
+          if test "$repair" = true; then
+            metadata_sha="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["metadata_sha"])' "$plan")"
+            test "$(git rev-parse "$metadata_sha^{tree}")" = "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["metadata_tree"])' "$plan")"
+            test "$(git rev-parse "$metadata_sha^")" = "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["expected_parent"])' "$plan")"
+            git merge-base --is-ancestor "$metadata_sha" origin/main
+            version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["candidate_version"])' "$plan")"
+            tag="v$version"
+            notes="$RUNNER_TEMP/release-notes.md"
+            python3 - "$plan" "$notes" <<'PY'
+          import json, sys
+          open(sys.argv[2], "w", encoding="utf-8").write(json.load(open(sys.argv[1]))["notes"])
+          PY
+            phase="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["phase"])' "$plan")"
+            if test "$phase" = metadata; then
+              ! git show-ref --verify --quiet "refs/tags/$tag"
+              signing_key="$RUNNER_TEMP/release-signing-key"
+              printf '%s\n' "$RELEASE_SIGNING_KEY" > "$signing_key"
+              chmod 600 "$signing_key"
+              git config gpg.format ssh
+              git config user.signingkey "$signing_key"
+              if test -n "$RELEASE_SIGNING_KEY_PASSPHRASE"; then
+                printf '#!/bin/sh\nprintf "%%s\\n" "$RELEASE_SIGNING_KEY_PASSPHRASE"\n' > "$RUNNER_TEMP/askpass"
+                chmod 700 "$RUNNER_TEMP/askpass"
+                export SSH_ASKPASS="$RUNNER_TEMP/askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=release
+              fi
+              git tag -s "$tag" -F "$notes" --cleanup=verbatim "$metadata_sha"
+              python3 scripts/release.py verify-tag "$tag" --target "$metadata_sha"
+              git push origin "refs/tags/$tag"
+            else
+              python3 scripts/release.py verify-tag "$tag" --target "$metadata_sha"
+            fi
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "metadata_sha=$metadata_sha" >> "$GITHUB_OUTPUT"
+            echo "notes_b64=$(base64 < "$notes" | tr -d '\n')" >> "$GITHUB_OUTPUT"
+            echo "batch_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["batch_id"])' "$plan")" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test "$(git rev-parse origin/main)" = "$SOURCE_FRONTIER" || { echo 'CAS_STALE: next queued run must reconcile'; exit 2; }
+          version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["candidate_version"])' "$plan")"
+          notes="$RUNNER_TEMP/release-notes.md"
+          python3 - "$plan" "$notes" <<'PY'
+          import json, sys
+          plan = json.load(open(sys.argv[1]))
+          body = plan["notes"].rstrip() + "\n\n<!-- release-provenance: " + plan["batch_id"] + " -->\n"
+          open(sys.argv[2], "w", encoding="utf-8").write(body)
+          PY
+          provenance="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["batch_id"])' "$plan")"
+          python3 scripts/release.py render --input <(python3 - "$plan" "$provenance" "$notes" <<'PY'
+          import datetime, json, sys
+          plan = json.load(open(sys.argv[1]))
+          notes = open(sys.argv[3], encoding="utf-8").read()
+          print(json.dumps({"candidate_version": plan["candidate_version"], "notes": notes,
+                            "release_date": datetime.date.today().isoformat(), "provenance": sys.argv[2]}))
+          PY
+          )
+          git config user.name 'divvy-release[bot]'
+          git config user.email 'divvy-release[bot]@users.noreply.github.com'
+          signing_key="$RUNNER_TEMP/release-signing-key"
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$signing_key"
+          chmod 600 "$signing_key"
+          git config gpg.format ssh
+          git config user.signingkey "$signing_key"
+          if test -n "$RELEASE_SIGNING_KEY_PASSPHRASE"; then
+            printf '#!/bin/sh\nprintf "%%s\\n" "$RELEASE_SIGNING_KEY_PASSPHRASE"\n' > "$RUNNER_TEMP/askpass"
+            chmod 700 "$RUNNER_TEMP/askpass"
+            export SSH_ASKPASS="$RUNNER_TEMP/askpass" SSH_ASKPASS_REQUIRE=force DISPLAY=release
+          fi
+          batch_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["batch_id"])' "$plan")"
+          prior_tag="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["prior_tag"])' "$plan")"
+          pr_digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pr_set_digest"])' "$plan")"
+          label_note_digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["label_note_digest"])' "$plan")"
+          git add VERSION CHANGELOG.md
+          metadata_tree="$(git write-tree)"
+            git commit -m "chore(release): v$version" \
+            -m "Release-Schema: 1" -m "Release-Batch: $batch_id" -m "Release-Frontier: $SOURCE_FRONTIER" \
+            -m "Release-Prior-Tag: $prior_tag" -m "Release-PR-Set-Digest: $pr_digest" \
+            -m "Release-Label-Note-Digest: $label_note_digest" -m "Release-Metadata-Tree: $metadata_tree" \
+            -m "Release-Candidate: $version" -m "Release-Expected-Parent: $SOURCE_FRONTIER" \
+            -m "Release-Stop-Owner: release-automation"
+          metadata_sha="$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^)" = "$SOURCE_FRONTIER"
+          tag="v$version"
+          test -z "$(git tag --list "$tag")"
+          git tag -s "$tag" -F "$notes" --cleanup=verbatim
+          python3 scripts/release.py verify-tag "$tag" --target "$metadata_sha"
+          git push --atomic origin "$metadata_sha:refs/heads/main" "refs/tags/$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "metadata_sha=$metadata_sha" >> "$GITHUB_OUTPUT"
+          echo "notes_b64=$(base64 < "$notes" | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          echo "batch_id=$batch_id" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: [authorize-and-test, commit-sign-tag]
+    runs-on: macos-latest
+    environment: release-automation
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.commit-sign-tag.outputs.metadata_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Revalidate frozen authorization before secret access
+        env:
+          AUTHORIZATION_DIGEST: ${{ needs.authorize-and-test.outputs.authorization_digest }}
+          PLAN_B64: ${{ needs.authorize-and-test.outputs.plan_b64 }}
+          WORKFLOW_REVISION: ${{ needs.authorize-and-test.outputs.workflow_revision }}
+          METADATA_SHA: ${{ needs.commit-sign-tag.outputs.metadata_sha }}
+        run: |
+          set -eu
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git rev-parse HEAD)" = "$METADATA_SHA"
+          test "$WORKFLOW_REVISION" = "$(git rev-parse HEAD:.github/workflows/release.yml)"
+          plan="$RUNNER_TEMP/release-plan.publish-pre-secret.json"
+          printf '%s' "$PLAN_B64" | base64 --decode > "$plan"
+          observed="$(python3 - "$plan" "$WORKFLOW_REVISION" <<'PY'
+          import hashlib, json, sys
+          plan = json.load(open(sys.argv[1])); plan["workflow_revision"] = sys.argv[2]
+          print(hashlib.sha256(json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+          PY
+          )"
+          test "$observed" = "$AUTHORIZATION_DIGEST"
+      - name: Mint one repository-scoped short-lived App token
+        id: app
+        env:
+          RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+          RELEASE_APP_INSTALLATION_ID: ${{ vars.RELEASE_APP_INSTALLATION_ID }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        run: |
+          set -eu
+          python3 scripts/release.py mint-app-token \
+            --repository "$GITHUB_REPOSITORY" --github-output "$GITHUB_OUTPUT"
+      - name: Exact Release reconciliation with App authorization
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TAG: ${{ needs.commit-sign-tag.outputs.tag }}
+          METADATA_SHA: ${{ needs.commit-sign-tag.outputs.metadata_sha }}
+          NOTES_B64: ${{ needs.commit-sign-tag.outputs.notes_b64 }}
+        run: |
+          set -eu
+          test "$GITHUB_REPOSITORY" = "kaidomo/divvy-skill"
+          git remote set-url origin "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY.git"
+          cleanup() { git remote set-url origin "https://github.com/$GITHUB_REPOSITORY.git"; }
+          trap cleanup EXIT
+          git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
+          python3 scripts/release.py verify-tag "$TAG" --target "$METADATA_SHA"
+          notes="$RUNNER_TEMP/release-notes.md"
+          printf '%s' "$NOTES_B64" | base64 --decode > "$notes"
+          expected="$RUNNER_TEMP/expected-release.json"
+          python3 - "$TAG" "$METADATA_SHA" "$notes" "$expected" <<'PY'
+          import json, sys
+          json.dump({"tag_name": sys.argv[1], "target_commitish": sys.argv[2], "name": sys.argv[1],
+                     "body": open(sys.argv[3], encoding="utf-8").read(), "draft": False,
+                     "prerelease": False}, open(sys.argv[4], "w", encoding="utf-8"))
+          PY
+          observed="$RUNNER_TEMP/observed-release.json"
+          status="$(curl --silent --show-error --output "$observed" --write-out '%{http_code}' \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
+          if test "$status" = 404; then
+            gh api --method POST "repos/$GITHUB_REPOSITORY/releases" --input "$expected" > "$observed"
+          elif test "$status" != 200; then
+            echo "RELEASE_LOOKUP_FAILED: HTTP $status"
+            exit 2
+          fi
+          python3 - "$expected" "$observed" <<'PY'
+          import json, sys
+          expected, observed = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+          fields = ("tag_name", "name", "body", "draft", "prerelease")
+          differing = [field for field in fields if expected.get(field) != observed.get(field)]
+          if differing:
+              raise SystemExit("PUBLIC_RELEASE_MISMATCH: " + ",".join(differing))
+          print("MATCHING_NOOP")
+          PY
