@@ -437,12 +437,28 @@ jobs:
   publish:
     needs: commit-sign-tag
     runs-on: macos-latest
+    environment: release-automation
     permissions:
-      contents: write
+      contents: read
     steps:
-      - name: Checkout-free exact Release reconciliation
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.commit-sign-tag.outputs.metadata_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Mint one repository-scoped short-lived App token
+        id: app
         env:
-          GH_TOKEN: ${{ github.token }}
+          RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+          RELEASE_APP_INSTALLATION_ID: ${{ vars.RELEASE_APP_INSTALLATION_ID }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        run: |
+          set -eu
+          python3 scripts/release.py mint-app-token \
+            --repository "$GITHUB_REPOSITORY" --github-output "$GITHUB_OUTPUT"
+      - name: Exact Release reconciliation with App authorization
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           TAG: ${{ needs.commit-sign-tag.outputs.tag }}
           METADATA_SHA: ${{ needs.commit-sign-tag.outputs.metadata_sha }}
           NOTES_B64: ${{ needs.commit-sign-tag.outputs.notes_b64 }}
