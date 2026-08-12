@@ -141,11 +141,22 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("environment: release-automation", release)
         self.assertIn("pull-requests: read", release)
         self.assertNotIn("issues: write", release)
-        self.assertIn("contents: write", release)
+        publish = release.split("  publish:\n", 1)[1]
+        self.assertIn("environment: release-automation", publish)
+        self.assertIn("permissions:\n      contents: read", publish)
+        self.assertNotIn("github.token", publish)
+        self.assertIn("RELEASE_APP_PRIVATE_KEY", publish)
+        self.assertIn("ref: ${{ needs.commit-sign-tag.outputs.metadata_sha }}", publish)
+        self.assertIn("persist-credentials: false", publish)
+        self.assertIn("--repository \"$GITHUB_REPOSITORY\"", publish)
+        self.assertIn("--github-output \"$GITHUB_OUTPUT\"", publish)
+        self.assertIn("GH_TOKEN: ${{ steps.app.outputs.token }}", publish)
         self.assertIn("RELEASE_APP_PRIVATE_KEY", release)
         self.assertIn("RELEASE_SIGNING_KEY", release)
         self.assertNotIn("BLOCKED_REPOSITORY_POLICY", release)
-        self.assertIn("mint-app-token", release)
+        self.assertEqual(release.count("mint-app-token"), 2)
+        self.assertIn("GH_TOKEN: ${{ steps.app.outputs.token }}", release)
+        self.assertIn("Exact Release reconciliation with App authorization", release)
         self.assertIn("git push --atomic", release)
         self.assertIn("PUBLIC_RELEASE_MISMATCH", release)
         self.assertIn("Release-Expected-Parent", release)
@@ -153,7 +164,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertNotIn("pull_request_target", release)
         self.assertIn("fetch-depth: 2", ci)
         self.assertEqual(ci.count("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"), 1)
-        self.assertEqual(release.count("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"), 2)
+        self.assertEqual(release.count("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"), 3)
 
 
 class AutomaticReleaseContractTests(unittest.TestCase):
