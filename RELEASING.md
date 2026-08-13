@@ -55,7 +55,7 @@ python3 scripts/release.py verify-tag "v$(python3 scripts/release.py current)" -
 ## 권한과 자동화
 
 `.github/workflows/release.yml`은 `workflow_dispatch(tag)`만 릴리즈 효과 경계로 허용한다. `main`에서만 실행되는
-credential-free verify job이 VERSION, dated CHANGELOG, ancestry, trusted annotated tag와 signer를 먼저 고정한 뒤에만
+credential-free verify job이 VERSION, dated CHANGELOG, exact current-main target, trusted annotated tag와 signer를 먼저 고정한 뒤에만
 `release-automation` environment의 publish job이 repository-scoped App token을 참조한다. 기본 workflow token은
 read-only이고 publish job만 contents: write를 가진다. macOS runner는 이 저장소의 검증 의존성 때문에 유지한다.
 
@@ -70,13 +70,13 @@ ruleset·environment·secret·signer 변경 자체의 권한은 아니다. 그 �
 
 ## 실패와 복구
 
-- metadata 전 실패: tag snapshot과 main ancestry를 다시 읽고 한 번만 재계산한다.
+- metadata 전 실패: tag snapshot과 current main tip을 다시 읽고 한 번만 재계산한다.
 - metadata만 존재: 전체 batch identity와 first parent/tree/path를 확인한 뒤 같은 commit에 tag한다.
 - 올바른 tag만 존재: trusted target과 tagged notes를 확인한 뒤 누락된 Release만 만든다.
 - 정확히 같은 Release: 성공 no-op이며 추가 효과는 0이다.
 - 잘못된 공개 tag/Release: 이동·삭제·수정하지 않고 quarantine한다. reviewed 새 버전으로만 교정한다.
 - `workflow_dispatch`는 정확히 하나의 안정 tag 입력을 받는다. 기존 v0.1.0 Release의 historical
-  `target_commitish: main`은 공개 객체를 수정하지 않기 위한 compatibility 예외이며, 이후 Release는 tag commit과
-  exact readback한다.
+  `target_commitish`는 GitHub의 표시용 필드로 태그가 이미 존재할 때 태그 객체를 인증하는 근거가 아니다.
+  모든 Release는 signed tag object와 tag commit을 원격에서 exact readback한다.
 
 공개 객체 생성과 repository 설정은 항상 별도 task-scoped authority 경계다.

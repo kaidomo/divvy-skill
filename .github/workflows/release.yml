@@ -38,10 +38,8 @@ jobs:
         run: |
           # shellcheck disable=SC2129
           set -eu
-          case "$TAG" in
-            v[0-9]*.[0-9]*.[0-9]*) ;;
-            *) echo 'INVALID_STABLE_TAG' >&2; exit 2;;
-          esac
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
+            || { echo 'INVALID_STABLE_TAG' >&2; exit 2; }
           test "$GITHUB_REPOSITORY" = "kaidomo/divvy-skill"
           test "$GITHUB_REF" = "refs/heads/main"
           test -z "$(git status --porcelain)"
@@ -92,6 +90,7 @@ jobs:
           EXPECTED_NOTES_SHA: ${{ needs.verify-tag.outputs.notes_sha }}
           EXPECTED_WORKFLOW_REVISION: ${{ needs.verify-tag.outputs.workflow_revision }}
           EXPECTED_CHECKOUT_SHA: ${{ needs.verify-tag.outputs.checkout_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           test "$GITHUB_REPOSITORY" = "kaidomo/divvy-skill"
@@ -115,7 +114,7 @@ jobs:
           module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
           output.write_text(module.release_notes(root, module.read_version(root)), encoding="utf-8")
           PY
-          test "$(shasum -a 256 "$notes" | awk '{print $1}')" = "$EXPECTED_NOTES_SHA"
+          test "$(sha256sum "$notes" | awk '{print $1}')" = "$EXPECTED_NOTES_SHA"
           expected="$RUNNER_TEMP/expected-release.json"
           python3 - "$TAG" "$notes" "$expected" <<'PY'
           import json, sys
@@ -150,6 +149,7 @@ jobs:
           test "$remote_tag_commit" = "$EXPECTED_TAG_COMMIT"
           observed="$RUNNER_TEMP/observed-release.json"
           status="$(curl --silent --show-error --output "$observed" --write-out '%{http_code}' \
+            --connect-timeout 10 --max-time 60 --retry 3 --retry-connrefused \
             -H 'Accept: application/vnd.github+json' \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H 'X-GitHub-Api-Version: 2022-11-28' \
@@ -159,6 +159,7 @@ jobs:
             created=true
             gh api --method POST "repos/$GITHUB_REPOSITORY/releases" --input "$expected" > "$observed"
             curl --silent --show-error --fail --output "$observed" \
+              --connect-timeout 10 --max-time 60 --retry 3 --retry-connrefused \
               -H 'Accept: application/vnd.github+json' \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H 'X-GitHub-Api-Version: 2022-11-28' \
