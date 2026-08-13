@@ -21,7 +21,7 @@ GitHub login만 release label evidence를 만들 수 있다. timeline pagination
 ## 버전과 snapshot
 
 metadata commit의 첫 parent는 frozen source frontier다. 태그는 그 immutable metadata commit을 가리키고,
-그 commit은 현재 보호된 `main`에서 도달 가능해야 한다. 이후 main merge가 있어도 태그를 최신 main tip으로
+그 commit은 dispatch 시점의 보호된 `main` tip과 정확히 일치해야 한다. 이후 main merge가 있어도 태그를 최신 main tip으로
 옮기지 않는다. 태그된 snapshot에서 다음 네 값이 정확히 같아야 한다.
 
 1. `VERSION`
@@ -30,6 +30,17 @@ metadata commit의 첫 parent는 frozen source frontier다. 태그는 그 immuta
 4. 같은 tag/name/body의 GitHub Release
 
 CHANGELOG의 curated prose는 보존하고 자동 항목은 검증된 `- <immutable title> (#N)` 형식으로 추가한다.
+
+## Trusted tag 생성 절차
+
+1. 변경을 사람 리뷰·CI 후 보호된 `main`에 반영하고, 깨끗한 작업트리에서 `git fetch origin main --tags`를 실행한다.
+2. `main`을 fast-forward로 최신화하고 `VERSION`과 dated `CHANGELOG` 절을 검증한다.
+3. 승인된 개인 signing identity로 notes를 만들고 `git tag -s v<VERSION> -F <notes-file> --cleanup=verbatim`으로 signed annotated tag를 만든다.
+4. `git tag -v v<VERSION>`와 `python3 scripts/release.py verify-tag v<VERSION> --target <main-tip>`으로 서명·대상을 검증한다. 허용 signer와 tag bytes가 검토된 값이 아니면 중단한다.
+5. 승인된 계정으로 `git push origin refs/tags/v<VERSION>`만 수행한다. 기존 tag를 force-push하거나 이동하지 않는다.
+6. `gh workflow run release.yml --ref main -f tag=v<VERSION>`로 수동 dispatch하고, workflow의 원격 tag/commit/Release readback receipt를 확인한다.
+
+tag가 존재하지만 아직 Release가 없는 복구도 dispatch 시점의 live `main`이 tag commit과 정확히 같을 때만 허용한다. 그렇지 않으면 tag를 재사용하지 않고 새 버전으로 준비한다.
 
 ## 검증
 
