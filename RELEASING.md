@@ -35,8 +35,8 @@ CHANGELOG의 curated prose는 보존하고 자동 항목은 검증된 `- <immuta
 
 1. 변경을 사람 리뷰·CI 후 보호된 `main`에 반영하고, 깨끗한 작업트리에서 `git fetch origin main --tags`를 실행한다.
 2. `main`을 fast-forward로 최신화하고 `VERSION`과 dated `CHANGELOG` 절을 검증한다.
-3. 승인된 개인 signing identity로 notes를 만들고 `git tag -s v<VERSION> -F <notes-file> --cleanup=verbatim`으로 signed annotated tag를 만든다.
-4. `git tag -v v<VERSION>`와 `python3 scripts/release.py verify-tag v<VERSION> --target <main-tip>`으로 서명·대상을 검증한다. 허용 signer와 tag bytes가 검토된 값이 아니면 중단한다.
+3. SSH 서명 identity와 허용 signer 파일을 먼저 설정한다. `git config gpg.format ssh`, `git config user.signingkey <private-key>`, `git config gpg.ssh.allowedSignersFile .github/release_allowed_signers`를 사용하고, 실제 운영 public key만 허용한다. placeholder key는 추가하지 않는다. notes를 만든 뒤 `git tag -s v<VERSION> -F <notes-file> --cleanup=verbatim`으로 signed annotated tag를 만든다.
+4. `git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=.github/release_allowed_signers tag -v v<VERSION>`와 `python3 scripts/release.py verify-tag v<VERSION> --target <main-tip>`으로 서명·대상을 검증한다. 허용 signer와 tag bytes가 검토된 값이 아니면 중단한다.
 5. 승인된 계정으로 `git push origin refs/tags/v<VERSION>`만 수행한다. 기존 tag를 force-push하거나 이동하지 않는다.
 6. `gh workflow run release.yml --ref main -f tag=v<VERSION>`로 수동 dispatch하고, workflow의 원격 tag/commit/Release readback receipt를 확인한다.
 
@@ -83,7 +83,7 @@ ruleset·environment·secret·signer 변경 자체의 권한은 아니다. 그 �
 
 - metadata 전 실패: tag snapshot과 current main tip을 다시 읽고 한 번만 재계산한다.
 - metadata만 존재: 전체 batch identity와 first parent/tree/path를 확인한 뒤 같은 commit에 tag한다.
-- 올바른 tag만 존재: trusted target과 tagged notes를 확인한 뒤 누락된 Release만 만든다.
+- 올바른 tag만 존재: dispatch 시점의 live `main`이 tag commit과 정확히 같고 trusted target과 tagged notes가 일치할 때만 누락된 Release를 만든다.
 - 정확히 같은 Release: 성공 no-op이며 추가 효과는 0이다.
 - 잘못된 공개 tag/Release: 이동·삭제·수정하지 않고 quarantine한다. reviewed 새 버전으로만 교정한다.
 - `workflow_dispatch`는 정확히 하나의 안정 tag 입력을 받는다. 기존 v0.1.0 Release의 historical
