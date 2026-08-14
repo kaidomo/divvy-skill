@@ -54,7 +54,6 @@ primary 선택
 | `scripts/dispatch.sh` | 위임 실행기(`codex exec` 래퍼). `headless` 프로필·read-only 기본, 성공 판정 3조건 |
 | `scripts/init_state.py` | private ROSTER/LEDGER를 Git 작업트리 밖에 안전하게 생성하고 권한을 읽기 전용 점검하거나 명시적으로 migration |
 | `scripts/roster_probe.py` | `init_state.py paths`의 host-local ROSTER와 명시적 관측 JSON을 읽기 전용으로 대조. public template은 live truth로 거부 |
-| `scripts/omx_stop_hotfix.py` | OMX 0.20.4의 `identity-indeterminate` Stop 반복을 검사·완화·복원하는 명시적 로컬 도구 ([upstream #3420](https://github.com/Yeachan-Heo/oh-my-codex/issues/3420)) |
 | `scripts/ledger_distribution.py` | LEDGER 표에서 분포 집계를 생성하고 문서의 수치가 맞는지 검사 |
 | `scripts/release.py` | VERSION·태그·CHANGELOG 정합 검사, 다음 SemVer 계산, release notes 렌더링 |
 | `config/headless.config.toml` | Codex headless 프로필 설치 템플릿. 기존 사용자 파일은 덮어쓰지 않는다. |
@@ -132,10 +131,6 @@ python3 ~/divvy/scripts/init_state.py check-permissions
 
 # 3. Codex 프로필·인증 확인(미로그인이면 `codex login`)
 codex exec --profile headless --skip-git-repo-check --sandbox read-only "hi"
-
-# 선택: 부모 Codex App에서 OMX identity-indeterminate Stop 반복이 재현될 때만
-python3 ~/divvy/scripts/omx_stop_hotfix.py status
-python3 ~/divvy/scripts/omx_stop_hotfix.py apply
 
 # 4. 설치 확인 — Claude Code를 켜고
 #    "이 작업들 분배해줘" 처럼 물으면 divvy 가 뜬다. 안 뜨면 세션을 새로 시작한다.
@@ -217,28 +212,6 @@ scripts/dispatch.sh <브리프파일> <출력파일> [작업디렉터리]
 `5` 쓰기 승인 없음 · `6` 동일 출력 동시 실행 · `7` 경로 충돌·관리 이름 오용 ·
 `8` 정리 실패 — **다른 실패보다 우선해 보고한다**(원래 rc는 메시지에 남는다) ·
 `9` `DIVVY_EXPECT` 산출 계약 오류·미충족. rc 8에서는 산출물이 유효할 수 있으나 남은 상태를 봐야 한다.
-
-## OMX Stop 반복 로컬 완화
-
-Codex App의 부모 대화에서 divvy가 `codex exec` 결과를 회수한 뒤 OMX Stop hook이
-`identity-indeterminate`를 반복 주입하는 현상은 upstream
-[#3420](https://github.com/Yeachan-Heo/oh-my-codex/issues/3420)에서 추적한다. divvy 자체 원인으로
-단정하지 않으며, `headless` 프로필은 자식 runner의 hook만 끄므로 부모 App의 Stop hook에는 닿지 않는다.
-
-개인 컴퓨터에서 같은 현상이 재현될 때만 아래 도구를 명시적으로 실행한다. `dispatch.sh`는 이 도구를
-자동 호출하거나 전역 OMX 설치본을 자동 수정하지 않는다.
-
-```bash
-python3 scripts/omx_stop_hotfix.py status   # 설치본과 source/dist 상태 확인
-python3 scripts/omx_stop_hotfix.py apply    # OMX 0.20.4의 정확한 취약 형태일 때만 적용
-python3 scripts/omx_stop_hotfix.py restore  # 생성된 백업에서 원복
-```
-
-도구는 source와 실제 hook이 실행하는 dist를 함께 검사하고, `identity-indeterminate` Stop에만 neutral
-output 조건을 추가한다. 다른 포인터 실패의 기존 bounded/fail-closed 분기는 바꾸지 않는다. 이미 같은
-수정이 있으면 no-op이며, 버전이나 코드 형태가 예상과 다르면 파일을 건드리지 않고 거부한다. 적용 시
-각 파일 옆에 `.divvy-omx-3420.bak` 백업을 만든다. OMX 업데이트·재설치는 패치를 덮어쓸 수 있으므로
-그 뒤에는 `status`를 다시 실행한다. upstream 공식 수정이 배포되면 로컬 핫픽스 대신 그 버전을 사용한다.
 
 ## Host-local ROSTER drift probe
 
