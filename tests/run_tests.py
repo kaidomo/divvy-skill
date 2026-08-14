@@ -27,6 +27,7 @@ import json, os, signal, subprocess, sys, tempfile, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DISPATCH = os.path.join(ROOT, "scripts", "dispatch.sh")
+OMX_HOTFIX = os.path.join(ROOT, "scripts", "omx_stop_hotfix.py")
 INIT_STATE = os.path.join(ROOT, "scripts", "init_state.py")
 ROSTER_PROBE_TESTS = os.path.join(ROOT, "tests", "test_roster_probe.py")
 STATE_PERMISSION_TESTS = os.path.join(ROOT, "tests", "test_state_permissions.py")
@@ -865,6 +866,89 @@ with tempfile.TemporaryDirectory() as tmp:
     )
     check("LEDGER 생성 집계에 없는 유령 항목은 실패",
           r.returncode == 1 and "생성 집계에 없는" in r.stderr)
+
+# ------------------------------------------------------ OMX #3420 로컬 핫픽스
+SOURCE_VULNERABLE = '''\
+      const unmatchedStopSession = failure.stopReason === "session_scope_unmatched";
+      // keep generic bounded behavior
+      if (pointerCannotAuthorizeThisCwd || unmatchedStopSession || stopHookActive) {
+        outputJson = null;
+      }
+'''
+DIST_VULNERABLE = '''\
+            const unmatchedStopSession = failure.stopReason === "session_scope_unmatched";
+            // keep generic bounded behavior
+            if (pointerCannotAuthorizeThisCwd || unmatchedStopSession || stopHookActive) {
+                outputJson = null;
+            }
+'''
+
+def make_fake_omx(root, version="0.20.4", source=SOURCE_VULNERABLE, dist=DIST_VULNERABLE):
+    os.makedirs(os.path.join(root, "src", "scripts"), exist_ok=True)
+    os.makedirs(os.path.join(root, "dist", "scripts"), exist_ok=True)
+    write(os.path.join(root, "package.json"), json.dumps({"version": version}))
+    write(os.path.join(root, "src", "scripts", "codex-native-hook.ts"), source)
+    write(os.path.join(root, "dist", "scripts", "codex-native-hook.js"), dist)
+
+def run_hotfix(root, command):
+    return subprocess.run(
+        [sys.executable, OMX_HOTFIX, command, "--omx-root", root],
+        capture_output=True, text=True,
+    )
+
+with tempfile.TemporaryDirectory() as tmp:
+    make_fake_omx(tmp)
+    r = run_hotfix(tmp, "status")
+    check("OMX 핫픽스 status가 취약 source/dist 탐지", r.returncode == 0 and r.stdout.count("vulnerable") == 2)
+
+    r = run_hotfix(tmp, "apply")
+    source_path = os.path.join(tmp, "src", "scripts", "codex-native-hook.ts")
+    dist_path = os.path.join(tmp, "dist", "scripts", "codex-native-hook.js")
+    source_patched = read(source_path)
+    dist_patched = read(dist_path)
+    check("OMX 핫픽스가 source/dist 양쪽에만 적용됨",
+          r.returncode == 0
+          and 'pointer.status === "identity-indeterminate"' in source_patched
+          and 'pointer.status === "identity-indeterminate"' in dist_patched
+          and "keep generic bounded behavior" in source_patched)
+    check("  원본 백업 생성",
+          os.path.exists(source_path + ".divvy-omx-3420.bak")
+          and os.path.exists(dist_path + ".divvy-omx-3420.bak"))
+
+    before = (source_patched, dist_patched)
+    r = run_hotfix(tmp, "apply")
+    check("  재적용은 멱등 no-op",
+          r.returncode == 0 and "변경 없음" in r.stdout and before == (read(source_path), read(dist_path)))
+
+    r = run_hotfix(tmp, "restore")
+    check("  백업에서 원본 복원",
+          r.returncode == 0 and read(source_path) == SOURCE_VULNERABLE and read(dist_path) == DIST_VULNERABLE)
+    check("  복원 후 백업 제거",
+          not os.path.exists(source_path + ".divvy-omx-3420.bak")
+          and not os.path.exists(dist_path + ".divvy-omx-3420.bak"))
+
+with tempfile.TemporaryDirectory() as tmp:
+    make_fake_omx(tmp, version="0.20.5")
+    r = run_hotfix(tmp, "apply")
+    check("알 수 없는 OMX 버전은 수정 거부",
+          r.returncode == 2 and "지원하지 않는 OMX 버전" in r.stderr
+          and read(os.path.join(tmp, "src", "scripts", "codex-native-hook.ts")) == SOURCE_VULNERABLE)
+
+with tempfile.TemporaryDirectory() as tmp:
+    make_fake_omx(tmp, source=SOURCE_VULNERABLE.replace("unmatchedStopSession", "changedUpstream", 1))
+    r = run_hotfix(tmp, "apply")
+    check("source/dist 코드 형태가 다르면 수정 거부",
+          r.returncode == 2 and "예상과 다름" in r.stderr
+          and not any(name.endswith(".divvy-omx-3420.bak") for _base, _dirs, files in os.walk(tmp) for name in files))
+
+with tempfile.TemporaryDirectory() as tmp:
+    make_fake_omx(tmp)
+    dist_backup = os.path.join(tmp, "dist", "scripts", "codex-native-hook.js.divvy-omx-3420.bak")
+    write(dist_backup, "existing backup")
+    r = run_hotfix(tmp, "apply")
+    source_backup = os.path.join(tmp, "src", "scripts", "codex-native-hook.ts.divvy-omx-3420.bak")
+    check("기존 백업이 하나라도 있으면 새 백업 전에 거부",
+          r.returncode == 2 and "기존 백업" in r.stderr and not os.path.exists(source_backup))
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)
