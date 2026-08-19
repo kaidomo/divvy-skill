@@ -63,6 +63,12 @@ python3 scripts/release.py compare-release --input release-state.json
 python3 scripts/release.py verify-tag "v$(python3 scripts/release.py current)" --target <metadata-commit>
 ```
 
+`find-release`는 다른 서브커맨드와 달리 `--input`이 JSON **객체**가 아니라 `gh api releases` 응답 JSON **배열**(단일 페이지 또는 `--paginate --slurp`의 페이지-배열 둘 다 허용)을 기대한다.
+
+```bash
+python3 scripts/release.py find-release --tag v0.1.1 --input release-list.json
+```
+
 ## 권한과 자동화
 
 `.github/workflows/release.yml`은 `workflow_dispatch(tag)`만 릴리즈 효과 경계로 허용한다. `main`에서만 실행되는
@@ -89,5 +95,16 @@ ruleset·environment·secret·signer 변경 자체의 권한은 아니다. 그 �
 - `workflow_dispatch`는 정확히 하나의 안정 tag 입력을 받는다. 기존 v0.1.0 Release의 historical
   `target_commitish`는 GitHub의 표시용 필드로 태그가 이미 존재할 때 태그 객체를 인증하는 근거가 아니다.
   모든 Release는 signed tag object와 tag commit을 원격에서 exact readback한다.
+
+### 잔류 draft Release 복구 절차
+
+release 워크플로 실행 중 오류가 나면 draft Release가 남을 수 있습니다. 이후 재실행은 이 draft를 발견하고 fail-closed 되어 자동으로 이어서 publish하지 않습니다. 복구 절차:
+
+1. 해당 tag의 draft Release 존재 여부를 확인합니다.
+2. draft의 tag/name/body가 의도한 값과 일치하는지 확인합니다.
+3. 안전하지 않거나 불일치하면 draft를 삭제합니다.
+4. 삭제 후 workflow를 재dispatch합니다.
+
+draft를 검증 없이 자동으로 publish하지 않는 것이 이 워크플로의 fail-closed 정책입니다.
 
 공개 객체 생성과 repository 설정은 항상 별도 task-scoped authority 경계다.

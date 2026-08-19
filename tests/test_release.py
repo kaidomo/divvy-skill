@@ -141,7 +141,8 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("Complete credential-free publication preflight", release)
         self.assertLess(release.index("Complete credential-free publication preflight"), release.index("Mint one repository-scoped short-lived App token"))
         publish = release.split("  publish-tag:\n", 1)[1]
-        self.assertNotIn('python3 "$tagged/scripts/release.py"', publish.split("- name: Reconcile Release", 1)[1])
+        reconcile_section = publish.split("- name: Reconcile Release", 1)[1]
+        self.assertNotIn('python3 "$tagged/scripts/release.py"', reconcile_section)
         self.assertIn('tag: {required: true, type: string', release)
         self.assertEqual(release.count('test "$GITHUB_REF" = "refs/heads/main"'), 2)
         self.assertNotIn("  push:\n", release)
@@ -165,8 +166,45 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertNotIn('test "$TAG" = "v0.1.0"', release)
         self.assertIn("GITHUB_STEP_SUMMARY", release)
         self.assertEqual(release.count("mint-app-token"), 1)
-        self.assertIn('permissions != {"contents": "write", "metadata": "read"}', (ROOT / "scripts" / "release.py").read_text(encoding="utf-8"))
-        self.assertIn("PUBLIC_RELEASE_MISMATCH", release)
+        release_script_source = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
+        self.assertIn('permissions != {"contents": "write", "metadata": "read"}', release_script_source)
+        # release body comparison is enforced in scripts/release.py's compare_release(),
+        # not inline in the workflow (extracted so it is unit-testable and CRLF-normalized
+        # once, in one place) -- the Reconcile step must call it at both comparison points
+        # (pre-publish and the post-publish readback), and the underlying script must still
+        # fail closed on a mismatch.
+        self.assertIn("PUBLIC_RELEASE_MISMATCH", release_script_source)
+        self.assertEqual(reconcile_section.count("scripts/release.py compare-release"), 2)
+        self.assertIn("scripts/release.py find-release", reconcile_section)
+        # Pin down *which* files feed each compare-release call and that the
+        # second (post-publish) call is wired inside the created-branch, after
+        # the draft=false PATCH -- not just that the command text occurs twice
+        # somewhere in the step (a swapped-argument or misplaced call would
+        # still satisfy a bare occurrence count).
+        self.assertIn(
+            'python3 -c \'import json, sys; json.dump({"expected": json.load(open(sys.argv[1])), '
+            '"observed": json.load(open(sys.argv[2]))}, open(sys.argv[3], "w"))\' \\\n'
+            '            "$comparison_expected" "$observed" "$comparison_input"',
+            reconcile_section,
+        )
+        self.assertIn(
+            'python3 scripts/release.py compare-release --input "$comparison_input" >/dev/null', reconcile_section
+        )
+        created_branch = reconcile_section.split('if test "$created" = true; then\n', 1)[1]
+        self.assertIn(
+            'python3 -c \'import json, sys; json.dump({"expected": json.load(open(sys.argv[1])), '
+            '"observed": json.load(open(sys.argv[2]))}, open(sys.argv[3], "w"))\' \\\n'
+            '              "$expected" "$observed" "$comparison_input_after_publish"',
+            created_branch,
+        )
+        self.assertIn(
+            'python3 scripts/release.py compare-release --input "$comparison_input_after_publish" >/dev/null',
+            created_branch,
+        )
+        self.assertLess(
+            created_branch.index("-F draft=false"),
+            created_branch.index('compare-release --input "$comparison_input_after_publish"'),
+        )
         self.assertIn("git/ref/heads/main", release)
         self.assertNotIn("pull_request_target", release)
         self.assertIn("fetch-depth: 2", ci)
@@ -311,6 +349,67 @@ class AutomaticReleaseContractTests(unittest.TestCase):
         self.assertEqual(RELEASE.compare_release(expected, dict(expected)), "MATCHING_NOOP")
         with self.assertRaisesRegex(RELEASE.ReleaseError, "PUBLIC_RELEASE_MISMATCH"):
             RELEASE.compare_release(expected, dict(expected, body="wrong"))
+
+    def test_canonical_release_body_normalizes_all_newline_forms(self) -> None:
+        self.assertEqual(RELEASE.canonical_release_body("- fix\r\n- another\r\n"), "- fix\n- another\n")
+        self.assertEqual(RELEASE.canonical_release_body("- fix\r- another\r"), "- fix\n- another\n")
+        self.assertEqual(RELEASE.canonical_release_body("- fix\n- another"), "- fix\n- another\n")
+        self.assertEqual(RELEASE.canonical_release_body("- fix\n- another\n\n\n"), "- fix\n- another\n")
+        self.assertEqual(RELEASE.canonical_release_body(""), "\n")
+
+    def test_compare_release_treats_crlf_body_as_matching(self) -> None:
+        # Reconcile compares a locally-rendered `expected` body (LF, one trailing
+        # newline) against a GitHub Release `body` observed back over the API,
+        # which can come back CRLF-normalized or missing/duplicating the
+        # trailing newline. Without normalization this would spuriously raise
+        # PUBLIC_RELEASE_MISMATCH on an otherwise-identical release.
+        expected = {"tag_name": "v0.1.1", "name": "v0.1.1",
+                    "body": "- fix (#7)\n- another (#8)\n", "draft": False, "prerelease": False}
+        observed_crlf = dict(expected, body="- fix (#7)\r\n- another (#8)\r\n")
+        self.assertEqual(RELEASE.compare_release(expected, observed_crlf), "MATCHING_NOOP")
+        observed_no_trailing_newline = dict(expected, body="- fix (#7)\n- another (#8)")
+        self.assertEqual(RELEASE.compare_release(expected, observed_no_trailing_newline), "MATCHING_NOOP")
+
+    def test_compare_release_still_rejects_a_real_body_difference(self) -> None:
+        # Normalization must not mask an actual content mismatch.
+        expected = {"tag_name": "v0.1.1", "name": "v0.1.1",
+                    "body": "- fix (#7)\n", "draft": False, "prerelease": False}
+        observed = dict(expected, body="- fix (#7)\r\n- unexpected extra line\r\n")
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "PUBLIC_RELEASE_MISMATCH"):
+            RELEASE.compare_release(expected, observed)
+
+    def test_compare_release_recovers_after_a_mismatched_draft_is_fixed(self) -> None:
+        # Mid-failure recovery case: an earlier run left a draft Release whose
+        # body doesn't match the currently-expected snapshot (see RELEASING.md
+        # "잔류 draft Release 복구 절차"). The first comparison must fail closed;
+        # once the stale draft has been replaced with a matching one, the same
+        # compare_release call must succeed -- this is what makes the
+        # documented recovery procedure (delete draft, re-dispatch) safe to
+        # rely on rather than merely aspirational.
+        expected = {"tag_name": "v0.2.0", "name": "v0.2.0",
+                    "body": "- feat (#9)\n", "draft": True, "prerelease": False}
+        stale_draft = dict(expected, body="- stale note from a previous failed run\r\n")
+        with self.assertRaisesRegex(RELEASE.ReleaseError, "PUBLIC_RELEASE_MISMATCH"):
+            RELEASE.compare_release(expected, stale_draft)
+        recreated_draft = dict(expected, body="- feat (#9)\r\n")
+        self.assertEqual(RELEASE.compare_release(expected, recreated_draft), "MATCHING_NOOP")
+
+    def test_find_release_by_tag_matches_within_a_flat_page(self) -> None:
+        releases = [
+            {"tag_name": "v0.1.0", "id": 1},
+            {"tag_name": "v0.2.0", "id": 2},
+            {"tag_name": "v0.3.0", "id": 3},
+        ]
+        self.assertEqual(RELEASE.find_release_by_tag(releases, "v0.2.0"), {"tag_name": "v0.2.0", "id": 2})
+
+    def test_find_release_by_tag_returns_none_when_absent(self) -> None:
+        releases = [{"tag_name": "v0.1.0", "id": 1}]
+        self.assertIsNone(RELEASE.find_release_by_tag(releases, "v9.9.9"))
+
+    def test_find_release_by_tag_accepts_paginated_pages(self) -> None:
+        # `gh api --paginate --slurp` yields an array of per-page arrays.
+        pages = [[{"tag_name": "v0.1.0", "id": 1}], [{"tag_name": "v0.2.0", "id": 2}]]
+        self.assertEqual(RELEASE.find_release_by_tag(pages, "v0.2.0"), {"tag_name": "v0.2.0", "id": 2})
 
     def test_four_way_mismatch_names_differing_fields(self) -> None:
         with self.assertRaisesRegex(RELEASE.ReleaseError, "VERSION, CHANGELOG"):
