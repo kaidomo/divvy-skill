@@ -135,7 +135,7 @@ jobs:
           observed="$RUNNER_TEMP/observed-release.json"
           release_list="$RUNNER_TEMP/release-list.json"
           gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$release_list"
-          existing_release="$(jq -c --arg tag "$TAG" 'map(select(.tag_name == $tag)) | .[0] // empty' "$release_list")"
+          existing_release="$(python3 scripts/release.py find-release --tag "$TAG" --input "$release_list" | jq -c '.release // empty')"
           created=false
           if test -z "$existing_release"; then
             # Re-read the immutable tag and live main at the write boundary.
@@ -156,29 +156,21 @@ jobs:
           fi
           comparison_expected="$expected"
           if test "$created" = true; then comparison_expected="$RUNNER_TEMP/draft-release.json"; fi
-          CREATED="$created" python3 - "$comparison_expected" "$observed" <<'PY'
-          import json, os, sys
-          expected, observed = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
-          fields = ("tag_name", "name", "body", "draft", "prerelease")
-          differing = [field for field in fields if expected.get(field) != observed.get(field)]
-          if differing:
-              raise SystemExit("PUBLIC_RELEASE_MISMATCH: " + ",".join(differing))
-          print("RELEASE_CREATED_AND_READ_BACK" if os.environ.get("CREATED") == "true" else "MATCHING_NOOP")
-          PY
+          comparison_input="$RUNNER_TEMP/comparison-input.json"
+          python3 -c 'import json, sys; json.dump({"expected": json.load(open(sys.argv[1])), "observed": json.load(open(sys.argv[2]))}, open(sys.argv[3], "w"))' \
+            "$comparison_expected" "$observed" "$comparison_input"
+          python3 scripts/release.py compare-release --input "$comparison_input" >/dev/null
+          if test "$created" = true; then echo "RELEASE_CREATED_AND_READ_BACK"; else echo "MATCHING_NOOP"; fi
           if test "$created" = true; then
             release_id="$(jq -r .id "$observed")"
             gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
               -F draft=false > "$observed"
             gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$observed"
             jq -e '(.draft == false)' "$observed" >/dev/null
-            python3 - "$expected" "$observed" <<'PY'
-          import json, sys
-          expected, observed = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
-          fields = ("tag_name", "name", "body", "draft", "prerelease")
-          differing = [field for field in fields if expected.get(field) != observed.get(field)]
-          if differing:
-              raise SystemExit("PUBLIC_RELEASE_MISMATCH_AFTER_PUBLISH: " + ",".join(differing))
-          PY
+            comparison_input_after_publish="$RUNNER_TEMP/comparison-input-after-publish.json"
+            python3 -c 'import json, sys; json.dump({"expected": json.load(open(sys.argv[1])), "observed": json.load(open(sys.argv[2]))}, open(sys.argv[3], "w"))' \
+              "$expected" "$observed" "$comparison_input_after_publish"
+            python3 scripts/release.py compare-release --input "$comparison_input_after_publish" >/dev/null
           fi
           final_tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)"
           test "$final_tag_object" = "$EXPECTED_TAG_OBJECT"

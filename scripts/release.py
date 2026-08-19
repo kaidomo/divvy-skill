@@ -479,14 +479,46 @@ def resume_phase(expected: Dict[str, Any], observed: Dict[str, Any], phase: str)
     return phases[phase]
 
 
+def canonical_release_body(body: str) -> str:
+    """Normalize all newline forms before comparing Release bodies.
+
+    Matches docauth `scripts/check_release.py` and docloop
+    `tools/check_release.py`: CRLF/CR are folded to LF and the result is
+    made to end in exactly one trailing newline.
+    """
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.rstrip("\n") + "\n"
+
+
 def compare_release(expected: Dict[str, Any], observed: Optional[Dict[str, Any]]) -> str:
     if observed is None:
         return "CREATE_RELEASE"
     fields = ("tag_name", "name", "body", "draft", "prerelease")
-    differing = [field for field in fields if expected.get(field) != observed.get(field)]
+
+    def normalized_field(payload: Dict[str, Any], field: str) -> Any:
+        value = payload.get(field)
+        if field == "body" and isinstance(value, str):
+            return canonical_release_body(value)
+        return value
+
+    differing = [field for field in fields if normalized_field(expected, field) != normalized_field(observed, field)]
     if differing:
         raise ReleaseError(f"PUBLIC_RELEASE_MISMATCH: {','.join(differing)}; refusing overwrite")
     return "MATCHING_NOOP"
+
+
+def find_release_by_tag(pages: Any, tag: str) -> Optional[Dict[str, Any]]:
+    """Select a GitHub Release by tag from one or more `gh api --paginate --slurp` pages.
+
+    Accepts either a flat list of Release objects (a single, unpaginated
+    `gh api` response) or a list of per-page lists (`--paginate --slurp`
+    output), via the same `flatten_pages` tolerance used for timeline
+    evidence. Returns the first match, or None if the tag has no Release yet.
+    """
+    for release in flatten_pages(pages):
+        if release.get("tag_name") == tag:
+            return release
+    return None
 
 
 def four_way_equal(version: str, changelog: str, tag: str, release_tag: str) -> str:
@@ -641,6 +673,17 @@ def read_json_input(path: Optional[Path]) -> Dict[str, Any]:
     return value
 
 
+def read_json_array_input(path: Optional[Path]) -> Any:
+    try:
+        raw = path.read_text(encoding="utf-8") if path is not None else sys.stdin.read()
+        value = json.loads(raw)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReleaseError(f"invalid JSON input: {exc}") from exc
+    if not isinstance(value, list):
+        raise ReleaseError("JSON input must be an array")
+    return value
+
+
 def add_json_input(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--input", type=Path, help="read JSON object from a file (default: stdin)")
 
@@ -678,6 +721,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     release_parser = subparsers.add_parser("compare-release", help="compare expected and observed Release JSON")
     add_json_input(release_parser)
+
+    find_release_parser = subparsers.add_parser(
+        "find-release", help="select a Release by tag from a gh api releases list (single- or multi-page)"
+    )
+    add_json_input(find_release_parser)
+    find_release_parser.add_argument("--tag", required=True)
 
     render_parser = subparsers.add_parser("render", help="render VERSION/CHANGELOG in a clean checkout")
     add_json_input(render_parser)
@@ -757,6 +806,9 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
         elif args.command == "compare-release":
             payload = read_json_input(args.input)
             print(json.dumps({"status": compare_release(payload["expected"], payload.get("observed"))}, sort_keys=True))
+        elif args.command == "find-release":
+            pages = read_json_array_input(args.input)
+            print(json.dumps({"release": find_release_by_tag(pages, args.tag)}, sort_keys=True))
         elif args.command == "render":
             payload = read_json_input(args.input)
             root = args.root.resolve()
