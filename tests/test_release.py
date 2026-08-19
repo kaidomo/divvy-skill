@@ -175,13 +175,19 @@ class ReleaseMetadataTests(unittest.TestCase):
         # fail closed on a mismatch.
         self.assertIn("PUBLIC_RELEASE_MISMATCH", release_script_source)
         self.assertEqual(reconcile_section.count("scripts/release.py compare-release"), 2)
-        self.assertIn("scripts/release.py find-release", reconcile_section)
         # divvy-skill#15: the release list feeding find-release must be fetched
         # with --paginate --slurp (pinned exactly, not just "somewhere in the
-        # step") so repositories with >100 Releases are still searched fully.
+        # step") so repositories with >100 Releases are still searched fully,
+        # AND find-release must actually consume that same file ($release_list)
+        # -- pinning the producer command alone would not catch find-release
+        # being pointed at a different (e.g. unpaginated) file (Codex review,
+        # PR #19 r1-01).
         self.assertIn(
             'gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$release_list"',
             reconcile_section,
+        )
+        self.assertIn(
+            'python3 scripts/release.py find-release --tag "$TAG" --input "$release_list"', reconcile_section
         )
         # Pin down *which* files feed each compare-release call and that the
         # second (post-publish) call is wired inside the created-branch, after
