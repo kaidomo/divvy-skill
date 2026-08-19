@@ -260,9 +260,10 @@ python3 scripts/release.py check                # VERSION + CHANGELOG 정합
 python3 scripts/release.py check --tag "v$(python3 scripts/release.py current)" --history
 ```
 
-보호된 `main`에 PR이 병합되면 기본적으로 릴리즈 queue가 immutable merge evidence를 검증하고
-`VERSION`·CHANGELOG·trusted signed annotated tag·GitHub Release를 같은 tagged snapshot에 맞춘다.
-허용된 actor가 merge 시점에 설정한 `release:skip`만 즉시 cut을 생략한다. 이후 main이 진행돼도 공개 태그를
+릴리즈는 `main`에서만 `workflow_dispatch`의 정확한 stable `tag` 입력으로 시작한다. verify job이
+`VERSION`·CHANGELOG·trusted signed annotated tag·GitHub Release를 같은 tagged snapshot에 맞춘 뒤,
+별도 publish job이 exact readback한다. 기존 PR/label evidence와 batch 계산기는 release candidate를 계획·검증하는
+로컬 adapter로 보존되며, push가 자동으로 Release를 발행하지 않는다. 이후 main이 진행돼도 공개 태그를
 최신 tip으로 옮기지 않는다. 버전 floor, label conflict, signer trust, partial resume와 권한 경계는
 [`RELEASING.md`](./RELEASING.md)를 따른다.
 
