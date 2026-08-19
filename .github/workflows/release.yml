@@ -28,6 +28,13 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Validate release controls without effect credentials
+        run: |
+          set -eu
+          python3 tests/test_release.py
+          env -u CODEX_SANDBOX python3 tests/run_tests.py
+          python3 scripts/ledger_distribution.py --check templates/LEDGER.md
+          git diff --check
       - name: Verify stable tag and release metadata
         id: evidence
         env:
