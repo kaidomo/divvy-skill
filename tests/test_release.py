@@ -176,6 +176,35 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("PUBLIC_RELEASE_MISMATCH", release_script_source)
         self.assertEqual(reconcile_section.count("scripts/release.py compare-release"), 2)
         self.assertIn("scripts/release.py find-release", reconcile_section)
+        # Pin down *which* files feed each compare-release call and that the
+        # second (post-publish) call is wired inside the created-branch, after
+        # the draft=false PATCH -- not just that the command text occurs twice
+        # somewhere in the step (a swapped-argument or misplaced call would
+        # still satisfy a bare occurrence count).
+        self.assertIn(
+            'python3 -c \'import json, sys; json.dump({"expected": json.load(open(sys.argv[1])), '
+            '"observed": json.load(open(sys.argv[2]))}, open(sys.argv[3], "w"))\' \\\n'
+            '            "$comparison_expected" "$observed" "$comparison_input"',
+            reconcile_section,
+        )
+        self.assertIn(
+            'python3 scripts/release.py compare-release --input "$comparison_input" >/dev/null', reconcile_section
+        )
+        created_branch = reconcile_section.split('if test "$created" = true; then\n', 1)[1]
+        self.assertIn(
+            'python3 -c \'import json, sys; json.dump({"expected": json.load(open(sys.argv[1])), '
+            '"observed": json.load(open(sys.argv[2]))}, open(sys.argv[3], "w"))\' \\\n'
+            '              "$expected" "$observed" "$comparison_input_after_publish"',
+            created_branch,
+        )
+        self.assertIn(
+            'python3 scripts/release.py compare-release --input "$comparison_input_after_publish" >/dev/null',
+            created_branch,
+        )
+        self.assertLess(
+            created_branch.index("-F draft=false"),
+            created_branch.index('compare-release --input "$comparison_input_after_publish"'),
+        )
         self.assertIn("git/ref/heads/main", release)
         self.assertNotIn("pull_request_target", release)
         self.assertIn("fetch-depth: 2", ci)

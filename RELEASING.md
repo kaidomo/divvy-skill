@@ -63,6 +63,12 @@ python3 scripts/release.py compare-release --input release-state.json
 python3 scripts/release.py verify-tag "v$(python3 scripts/release.py current)" --target <metadata-commit>
 ```
 
+`find-release`는 다른 서브커맨드와 달리 `--input`이 JSON **객체**가 아니라 `gh api releases` 응답 JSON **배열**(단일 페이지 또는 `--paginate --slurp`의 페이지-배열 둘 다 허용)을 기대한다.
+
+```bash
+python3 scripts/release.py find-release --tag v0.1.1 --input release-list.json
+```
+
 ## 권한과 자동화
 
 `.github/workflows/release.yml`은 `workflow_dispatch(tag)`만 릴리즈 효과 경계로 허용한다. `main`에서만 실행되는

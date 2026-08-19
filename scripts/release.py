@@ -688,6 +688,10 @@ def add_json_input(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--input", type=Path, help="read JSON object from a file (default: stdin)")
 
 
+def add_json_array_input(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--input", type=Path, help="read a JSON array from a file (default: stdin)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="divvy release metadata helper")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -725,7 +729,7 @@ def build_parser() -> argparse.ArgumentParser:
     find_release_parser = subparsers.add_parser(
         "find-release", help="select a Release by tag from a gh api releases list (single- or multi-page)"
     )
-    add_json_input(find_release_parser)
+    add_json_array_input(find_release_parser)
     find_release_parser.add_argument("--tag", required=True)
 
     render_parser = subparsers.add_parser("render", help="render VERSION/CHANGELOG in a clean checkout")
