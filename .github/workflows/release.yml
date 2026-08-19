@@ -134,7 +134,7 @@ jobs:
           test "$remote_tag_commit" = "$EXPECTED_TAG_COMMIT"
           observed="$RUNNER_TEMP/observed-release.json"
           release_list="$RUNNER_TEMP/release-list.json"
-          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$release_list"
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$release_list"
           existing_release="$(python3 scripts/release.py find-release --tag "$TAG" --input "$release_list" | jq -c '.release // empty')"
           created=false
           if test -z "$existing_release"; then

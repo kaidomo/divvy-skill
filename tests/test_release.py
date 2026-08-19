@@ -175,7 +175,20 @@ class ReleaseMetadataTests(unittest.TestCase):
         # fail closed on a mismatch.
         self.assertIn("PUBLIC_RELEASE_MISMATCH", release_script_source)
         self.assertEqual(reconcile_section.count("scripts/release.py compare-release"), 2)
-        self.assertIn("scripts/release.py find-release", reconcile_section)
+        # divvy-skill#15: the release list feeding find-release must be fetched
+        # with --paginate --slurp (pinned exactly, not just "somewhere in the
+        # step") so repositories with >100 Releases are still searched fully,
+        # AND find-release must actually consume that same file ($release_list)
+        # -- pinning the producer command alone would not catch find-release
+        # being pointed at a different (e.g. unpaginated) file (Codex review,
+        # PR #19 r1-01).
+        self.assertIn(
+            'gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$release_list"',
+            reconcile_section,
+        )
+        self.assertIn(
+            'python3 scripts/release.py find-release --tag "$TAG" --input "$release_list"', reconcile_section
+        )
         # Pin down *which* files feed each compare-release call and that the
         # second (post-publish) call is wired inside the created-branch, after
         # the draft=false PATCH -- not just that the command text occurs twice
@@ -410,6 +423,44 @@ class AutomaticReleaseContractTests(unittest.TestCase):
         # `gh api --paginate --slurp` yields an array of per-page arrays.
         pages = [[{"tag_name": "v0.1.0", "id": 1}], [{"tag_name": "v0.2.0", "id": 2}]]
         self.assertEqual(RELEASE.find_release_by_tag(pages, "v0.2.0"), {"tag_name": "v0.2.0", "id": 2})
+
+    @staticmethod
+    def _paginated_release_fixture(total: int, per_page: int = 100):
+        """Simulate `gh api --paginate --slurp .../releases?per_page=100` for
+        `total` releases: GitHub returns newest-first, so release #1 (the
+        target, oldest/first ever tagged) lands on the *last* page once
+        `total` exceeds one page. Returns (pages, target_tag)."""
+        # id/tag_name descending (newest first), matching GitHub's real ordering.
+        releases = [{"tag_name": f"v0.0.{n}", "id": n} for n in range(total, 0, -1)]
+        pages = [releases[i : i + per_page] for i in range(0, len(releases), per_page)]
+        target_tag = "v0.0.1"  # the oldest release: guaranteed to be on the last page
+        return pages, target_tag
+
+    def test_find_release_by_tag_is_idempotent_across_more_than_one_hundred_releases(self) -> None:
+        # divvy-skill#15: with >100 releases, `gh api --paginate --slurp`
+        # returns more than one page; find_release_by_tag must locate a
+        # release that only appears on a later page, and do so
+        # deterministically across repeated calls on the same fixture.
+        pages, target_tag = self._paginated_release_fixture(total=137)
+        self.assertEqual(len(pages), 2)  # 100 + 37, i.e. genuinely paginated
+        expected = {"tag_name": target_tag, "id": 1}
+        self.assertEqual(RELEASE.find_release_by_tag(pages, target_tag), expected)
+        # idempotency: re-running the same lookup against the same fixture
+        # yields the identical result (no hidden mutation of `pages`).
+        self.assertEqual(RELEASE.find_release_by_tag(pages, target_tag), expected)
+
+    def test_find_release_by_tag_regresses_without_pagination(self) -> None:
+        # Regression proof: before divvy-skill#15, the workflow ran a bare
+        # `gh api "repos/.../releases?per_page=100"` (no --paginate --slurp),
+        # so only the first page was ever fetched. Reproduce that pre-#15
+        # code path here -- pass only pages[0] instead of the full `pages`
+        # list -- and confirm the *same* fixture that #15 fixes genuinely
+        # fails under the old, unpaginated behavior. This is what proves the
+        # new idempotency test above is actually exercising the pagination
+        # fix and not passing vacuously.
+        pages, target_tag = self._paginated_release_fixture(total=137)
+        first_page_only = pages[0]  # what a non-paginated `gh api` call would have returned
+        self.assertIsNone(RELEASE.find_release_by_tag(first_page_only, target_tag))
 
     def test_four_way_mismatch_names_differing_fields(self) -> None:
         with self.assertRaisesRegex(RELEASE.ReleaseError, "VERSION, CHANGELOG"):
