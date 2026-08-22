@@ -116,6 +116,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          read_release_with_retry() {
+            local release_id="$1" out="$2" want_draft="$3" attempt
+            for attempt in 1 2 3 4 5; do
+              if gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$out" 2>/dev/null \
+                && jq -e --argjson id "$release_id" --argjson draft "$want_draft" \
+                  '.id == $id and .draft == $draft' "$out" >/dev/null 2>&1; then
+                return 0
+              fi
+              test "$attempt" = 5 && return 1
+              sleep 2
+            done
+          }
           expected="$RUNNER_TEMP/expected-release.json"
           remote_tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)"
           test "$remote_tag_object" = "$EXPECTED_TAG_OBJECT"
@@ -139,7 +151,7 @@ jobs:
             jq '.draft = true' "$expected" > "$draft_expected"
             gh api --method POST "repos/$GITHUB_REPOSITORY/releases" --input "$draft_expected" > "$observed"
             release_id="$(jq -r .id "$observed")"
-            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$observed"
+            read_release_with_retry "$release_id" "$observed" true
           else
             printf '%s\n' "$existing_release" >"$observed"
           fi
@@ -154,7 +166,7 @@ jobs:
             release_id="$(jq -r .id "$observed")"
             gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
               -F draft=false > "$observed"
-            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$observed"
+            read_release_with_retry "$release_id" "$observed" false
             jq -e '(.draft == false)' "$observed" >/dev/null
             comparison_input_after_publish="$RUNNER_TEMP/comparison-input-after-publish.json"
             python3 -c 'import json, sys; json.dump({"expected": json.load(open(sys.argv[1])), "observed": json.load(open(sys.argv[2]))}, open(sys.argv[3], "w"))' \
