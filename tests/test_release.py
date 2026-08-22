@@ -139,7 +139,10 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn('test "$GITHUB_SHA" = "$EXPECTED_CHECKOUT_SHA"', release)
         self.assertEqual(release.count('--history'), 2)
         self.assertIn("Complete credential-free publication preflight", release)
-        self.assertLess(release.index("Complete credential-free publication preflight"), release.index("Mint one repository-scoped short-lived App token"))
+        self.assertLess(
+            release.index("Complete credential-free publication preflight"),
+            release.index("- name: Reconcile Release with the verified snapshot"),
+        )
         publish = release.split("  publish-tag:\n", 1)[1]
         reconcile_section = publish.split("- name: Reconcile Release", 1)[1]
         self.assertNotIn('python3 "$tagged/scripts/release.py"', reconcile_section)
@@ -150,24 +153,24 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("  publish-tag:\n", release)
         verify_tag_section = release.split("  verify-tag:\n", 1)[1].split("  publish-tag:\n", 1)[0]
         self.assertIn("permissions:\n      contents: read", verify_tag_section)
-        self.assertIn("permissions:\n      contents: read", release.split("  publish-tag:\n", 1)[1])
+        self.assertIn("permissions:\n      contents: write", release.split("  publish-tag:\n", 1)[1])
         self.assertIn("python3 tests/test_release.py", verify_tag_section)
         self.assertIn("env -u CODEX_SANDBOX python3 tests/run_tests.py", verify_tag_section)
         self.assertIn("python3 scripts/ledger_distribution.py --check templates/LEDGER.md", verify_tag_section)
         self.assertIn("git diff --check", verify_tag_section)
         self.assertIn("group: release-${{ github.repository }}-main", release)
         self.assertNotIn("cancel-in-progress", release)
-        self.assertIn("environment: release-automation", release)
+        self.assertNotIn("environment: release-automation", release)
         self.assertNotIn("pull-requests: write", release)
         self.assertNotIn("issues: write", release)
-        self.assertIn("GH_TOKEN: ${{ steps.app.outputs.token }}", release)
-        self.assertNotIn("GH_TOKEN: ${{ github.token }}", release)
-        self.assertIn("RELEASE_APP_PRIVATE_KEY", release)
+        self.assertIn("GH_TOKEN: ${{ github.token }}", release)
+        self.assertNotIn("steps.app.outputs.token", release)
+        self.assertNotIn("RELEASE_APP_PRIVATE_KEY", release)
         self.assertNotIn('test "$TAG" = "v0.1.0"', release)
         self.assertIn("GITHUB_STEP_SUMMARY", release)
-        self.assertEqual(release.count("mint-app-token"), 1)
+        self.assertEqual(release.count("mint-app-token"), 0)
         release_script_source = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
-        self.assertIn('permissions != {"contents": "write", "metadata": "read"}', release_script_source)
+        self.assertNotIn("mint_app_token", release_script_source)
         # release body comparison is enforced in scripts/release.py's compare_release(),
         # not inline in the workflow (extracted so it is unit-testable and CRLF-normalized
         # once, in one place) -- the Reconcile step must call it at both comparison points
@@ -539,11 +542,6 @@ class AutomaticReleaseContractTests(unittest.TestCase):
             fixture(root, version="0.1.1")
             (root / "CHANGELOG.md").write_text(rendered, encoding="utf-8")
             self.assertEqual(RELEASE.release_notes(root, "0.1.1"), body)
-
-    def test_app_token_scope_fails_before_network_for_other_repository(self) -> None:
-        with self.assertRaisesRegex(RELEASE.ReleaseError, "APP_SCOPE_MISMATCH"):
-            RELEASE.mint_app_token("1", "2", "private", "kaidomo/other")
-
 
 if __name__ == "__main__":
     unittest.main()

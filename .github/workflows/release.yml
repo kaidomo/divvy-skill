@@ -68,9 +68,8 @@ jobs:
   publish-tag:
     needs: verify-tag
     runs-on: ubuntu-latest
-    environment: release-automation
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -106,16 +105,6 @@ jobs:
                      "body": open(sys.argv[2], encoding="utf-8").read(),
                      "draft": False, "prerelease": False}, open(sys.argv[3], "w"))
           PY
-      - name: Mint one repository-scoped short-lived App token
-        id: app
-        env:
-          RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
-          RELEASE_APP_INSTALLATION_ID: ${{ vars.RELEASE_APP_INSTALLATION_ID }}
-          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          python3 scripts/release.py mint-app-token \
-            --repository "$GITHUB_REPOSITORY" --github-output "$GITHUB_OUTPUT"
       - name: Reconcile Release with the verified snapshot
         env:
           TAG: ${{ needs.verify-tag.outputs.tag }}
@@ -124,7 +113,7 @@ jobs:
           EXPECTED_NOTES_SHA: ${{ needs.verify-tag.outputs.notes_sha }}
           EXPECTED_WORKFLOW_REVISION: ${{ needs.verify-tag.outputs.workflow_revision }}
           EXPECTED_CHECKOUT_SHA: ${{ needs.verify-tag.outputs.checkout_sha }}
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           expected="$RUNNER_TEMP/expected-release.json"
