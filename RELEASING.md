@@ -73,17 +73,21 @@ python3 scripts/release.py find-release --tag v0.1.1 --input release-list.json
 
 `.github/workflows/release.yml`은 `workflow_dispatch(tag)`만 릴리즈 효과 경계로 허용한다. `main`에서만 실행되는
 credential-free verify job이 VERSION, dated CHANGELOG, exact current-main target, trusted annotated tag와 signer를 먼저 고정한 뒤에만
-`release-automation` environment의 publish job이 repository-scoped App token을 참조한다. 기본 workflow token은
-read-only이고 publish job만 contents: write를 가진다. macOS runner는 이 저장소의 검증 의존성 때문에 유지한다.
+publish job이 실행된다. 기본 workflow token(`GITHUB_TOKEN`)은 read-only이고 publish job만 `contents: write`를
+가진다(`GH_TOKEN: ${{ github.token }}`). macOS runner는 verify job에만 이 저장소의 검증 의존성 때문에 유지하고,
+publish job은 `ubuntu-latest`를 쓴다 — docauth·docloop와 동일한 최소 권한 모델이다(release-auto#14 정책 통일).
 
 활성화 전에는 다음을 별도 승인하고 read back해야 한다: merge/squash-only, main PR/CI protection,
-`v*` update/delete 금지, actor-wide bypass 위험을 수용한 repo-scoped App 또는 metadata-PR fallback,
-environment/variables/secret names, public bot signer, CODEOWNERS human review, Release immutability 지원 여부.
+`v*` update/delete 금지, public bot signer, CODEOWNERS human review, Release immutability 지원 여부.
 private key/token/passphrase 값은 로그·PR·receipt에 기록하지 않는다.
 
-Divvy R1 canary는 전용 단일-repository App의 actor-wide direct bypass 모델을 선택했다. 이 선택은
-workflow의 metadata-only path 및 pre-secret revision/batch 검증을 구현하기 위한 것이며, App 설치나
-ruleset·environment·secret·signer 변경 자체의 권한은 아니다. 그 설정은 별도 packet과 readback 없이는 활성화하지 않는다.
+**이력**: Divvy R1 canary는 한때 전용 단일-repository App의 actor-wide direct bypass 모델을 선택했다 —
+당시 workflow가 merge 여러 건을 하나의 batch로 재구성하던 metadata-only path 및 pre-secret
+revision/batch 검증을 구현하기 위해서였다(그 App-token workflow는 실제로 설정·활성화된 적이 없다 —
+`RELEASE_APP_ID`/`RELEASE_APP_INSTALLATION_ID`/`RELEASE_APP_PRIVATE_KEY` 어느 것도 이 저장소에
+등록된 적이 없었다). 이후
+workflow가 지금의 단일 exact-tag `workflow_dispatch` 구조로 수렴하면서 그 근거가 사라져,
+docauth·docloop와 동일한 `GITHUB_TOKEN` 모델로 되돌렸다.
 
 ## 실패와 복구
 

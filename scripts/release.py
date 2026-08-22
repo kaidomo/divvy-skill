@@ -7,15 +7,11 @@ import argparse
 from datetime import date, datetime, timezone
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
-import time
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
-from urllib import request
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -586,72 +582,6 @@ def verify_trusted_tag(root: Path, tag: str, allowed_signers: Path, expected_tar
     return "TRUSTED"
 
 
-def base64url(value: bytes) -> bytes:
-    import base64
-    return base64.urlsafe_b64encode(value).rstrip(b"=")
-
-
-def mint_app_token(
-    app_id: str,
-    installation_id: str,
-    private_key: str,
-    repository: str,
-    api_url: str = "https://api.github.com",
-) -> Dict[str, Any]:
-    if repository != "kaidomo/divvy-skill":
-        raise ReleaseError("APP_SCOPE_MISMATCH: repository")
-    now = int(time.time())
-    signing_input = b".".join((
-        base64url(canonical_json({"alg": "RS256", "typ": "JWT"})),
-        base64url(canonical_json({"iat": now - 60, "exp": now + 540, "iss": app_id})),
-    ))
-    with tempfile.TemporaryDirectory() as raw:
-        key_path = Path(raw) / "app.pem"
-        key_path.write_text(private_key, encoding="utf-8")
-        key_path.chmod(0o600)
-        try:
-            signed = subprocess.run(
-                ["openssl", "dgst", "-sha256", "-sign", str(key_path)], input=signing_input,
-                check=True, capture_output=True,
-            ).stdout
-        except (OSError, subprocess.CalledProcessError) as exc:
-            raise ReleaseError(f"APP_TOKEN_MINT_FAILED: JWT signing: {exc}") from exc
-    jwt = (signing_input + b"." + base64url(signed)).decode("ascii")
-    body = canonical_json({
-        "repositories": ["divvy-skill"],
-        "permissions": {"contents": "write", "metadata": "read"},
-    })
-    req = request.Request(
-        f"{api_url}/app/installations/{installation_id}/access_tokens",
-        data=body,
-        method="POST",
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {jwt}",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with request.urlopen(req, timeout=30) as response:
-            payload = json.loads(response.read())
-    except Exception as exc:
-        raise ReleaseError(f"APP_TOKEN_MINT_FAILED: {exc}") from exc
-    token = payload.get("token")
-    expiry = parse_timestamp(str(payload.get("expires_at")))
-    repositories = {item.get("full_name") for item in payload.get("repositories", [])}
-    permissions = payload.get("permissions", {})
-    if not token or repositories != {repository}:
-        raise ReleaseError("APP_SCOPE_MISMATCH: returned repository set")
-    if permissions != {"contents": "write", "metadata": "read"}:
-        raise ReleaseError("APP_PERMISSION_MISMATCH")
-    ttl = int((expiry - datetime.now(timezone.utc)).total_seconds())
-    if ttl <= 0 or ttl > 3600:
-        raise ReleaseError("APP_TTL_MISMATCH")
-    return {"token": token, "expires_at": payload["expires_at"], "permissions": permissions,
-            "repositories": sorted(repositories), "ttl_seconds": ttl}
-
-
 def write_notes(path: Path, notes: str) -> None:
     if not path.parent.is_dir():
         raise ReleaseError(f"output directory does not exist: {path.parent}")
@@ -761,9 +691,6 @@ def build_parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--covered", type=Path)
     batch_parser.add_argument("--output", type=Path, required=True)
 
-    token_parser = subparsers.add_parser("mint-app-token", help="mint one short-lived repository-scoped App token")
-    token_parser.add_argument("--repository", required=True)
-    token_parser.add_argument("--github-output", type=Path, required=True)
     return parser
 
 
@@ -868,21 +795,6 @@ def main(argv: Optional[Tuple[str, ...]] = None) -> int:
             result = plan_batch(event, evidence, allowed_actors, read_version(), args.prior_tag, covered)
             write_notes(args.output, json.dumps(result, sort_keys=True, ensure_ascii=False) + "\n")
             print(f"release batch plan written: {args.output}")
-        elif args.command == "mint-app-token":
-            app_id = os.environ.get("RELEASE_APP_ID", "")
-            installation_id = os.environ.get("RELEASE_APP_INSTALLATION_ID", "")
-            private_key = os.environ.get("RELEASE_APP_PRIVATE_KEY", "")
-            if not app_id or not installation_id or not private_key:
-                raise ReleaseError("APP_TOKEN_MINT_FAILED: required environment is missing")
-            result = mint_app_token(app_id, installation_id, private_key, args.repository)
-            print(f"::add-mask::{result['token']}")
-            with args.github_output.open("a", encoding="utf-8") as output:
-                output.write(f"token={result['token']}\n")
-                output.write(f"expires_at={result['expires_at']}\n")
-                output.write(f"ttl_seconds={result['ttl_seconds']}\n")
-                output.write(f"repositories={json.dumps(result['repositories'], separators=(',', ':'))}\n")
-                output.write(f"permissions={json.dumps(result['permissions'], sort_keys=True, separators=(',', ':'))}\n")
-            print("repository-scoped App token minted and masked")
         return 0
     except (KeyError, OSError, UnicodeError, ReleaseError) as exc:
         print(f"release refused: {exc}", file=sys.stderr)
